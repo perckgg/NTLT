@@ -1,0 +1,7 @@
+weeklyassignment/
+01_Tabular/Adult Income Dataset - EDA Report with Interactive Tutorials.pdf
+01_Tabular/result/*_result*.ipynb
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.env
