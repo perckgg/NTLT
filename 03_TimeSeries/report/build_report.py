@@ -53,7 +53,7 @@ FIGURES = {
     "cycle": "plot_df['half_year']",
     "split": "def time_split(",
     "mae": "MODEL_ORDER = list(make_models())",
-    "forecast": "best_model = test_results.loc",
+    "forecast": "fig, axes = plt.subplots(2, 1, figsize=(14, 8))",
     "aqi": "AQI_BINS = ",
     "importance": "fig, axes = plt.subplots(1, 2, figsize=(16, 5))\nfor ax, (city, f) in zip(axes, forecasters.items()):\n    model",
 }
@@ -106,7 +106,8 @@ def load_results():
     periods = ast.literal_eval(re.search(r"Test: (\{.*\})", all_text).group(1))
     top = {c: ast.literal_eval(d) for c, d in re.findall(r"(\w+) – top 5: (\{.*\})", all_text)}
     versions = re.search(r"scikit-learn ([\d.]+)", all_text).group(1)
-    return {"test": test, "val": val, "aqi": aqi, "periods": periods, "top": top, "sklearn": versions}
+    best = ast.literal_eval(re.search(r"Best model \(chosen on Validation\): (\{.*\})", all_text).group(1))
+    return {"test": test, "val": val, "aqi": aqi, "periods": periods, "top": top, "sklearn": versions, "best": best}
 
 
 # ---------------------------------------------------------------- HTML building blocks
@@ -127,7 +128,8 @@ def figure(name, number, caption):
 
 def build_body(r, for_pdf):
     test, val, aqi, periods, top = r["test"], r["val"], r["aqi"], r["periods"], r["top"]
-    best = test[test.model != "Persistence (baseline)"].sort_values("MAE").groupby("city").head(1).set_index("city")
+    # the best model of each city is chosen on Validation (as in the notebook); Test is only reported
+    best = pd.concat([test[(test.city == c) & (test.model == m)] for c, m in r["best"].items()]).set_index("city")
     base = test[test.model == "Persistence (baseline)"].set_index("city")
     tree = test[test.model.isin(["RandomForest", "HistGradientBoosting"])]
 
@@ -179,7 +181,7 @@ def build_body(r, for_pdf):
 
 <div class="summary">
   <p><b>In one paragraph.</b> We collected 22 months of hourly PM2.5 (OpenAQ) and weather (Open-Meteo) data for one station in Hanoi and one in
-  Ho Chi Minh City (HCMC), and forecast PM2.5 24 hours ahead. On an untouched, chronologically last Test set, the best model lowers the MAE of the
+  Ho Chi Minh City (HCMC), and forecast PM2.5 24 hours ahead. On an untouched, chronologically last Test set, the best model (chosen on Validation) lowers the MAE of the
   naive Persistence forecast by <b>{b('Hanoi', 'reduction'):.1f}% in Hanoi</b> ({b('Hanoi', 'model')}, {base.loc['Hanoi', 'MAE']:.2f} → {b('Hanoi', 'MAE'):.2f} µg/m³)
   and by <b>{b('HCMC', 'reduction'):.1f}% in HCMC</b> ({b('HCMC', 'model')}, {base.loc['HCMC', 'MAE']:.2f} → {b('HCMC', 'MAE'):.2f} µg/m³),
   and predicts the correct US EPA air quality level in {aqi['Hanoi'][0]:.1f}% / {aqi['HCMC'][0]:.1f}% of hours.
@@ -232,15 +234,17 @@ All preprocessing lives in one <code>ColumnTransformer</code> + <code>Pipeline</
 <h2>4. Modeling</h2>
 <p>Models: <b>Persistence</b> (baseline), <b>Ridge</b>, <b>RandomForest</b> and <b>HistGradientBoosting</b>. Ridge and HGB are tuned with
 <code>GridSearchCV</code> on <code>TimeSeriesSplit(3)</code> (MAE); RandomForest uses a fixed, regularized configuration. A <code>CityForecaster</code>
-class runs the whole flow for one city. Validation results (used to choose hyperparameters and compare models):</p>
+class runs the whole flow for one city. Validation results (used to compare models and <b>choose the best model of each city</b>,
+so the Test set is never used for selection):</p>
 {table(val_tbl)}
 <p>All ML models beat the baseline on Validation in both cities. The baseline's R² is negative: copying today's value is worse than predicting the mean.
-In HCMC the signal is weak (R² ≤ 0.15) and the strongly regularized Ridge (alpha = 100) is best.</p>
+In HCMC the signal is weak (R² ≤ 0.15) and the strongly regularized Ridge (alpha = 100) is best.
+Selected models: <b>{r['best']['Hanoi']}</b> for Hanoi and <b>{r['best']['HCMC']}</b> for HCMC.</p>
 
 <h2>5. Results on the Test set</h2>
-<p>Each model is retrained on Train + Validation and evaluated <b>once</b> on Test.</p>
+<p>Each model is retrained on Train + Validation and evaluated <b>once</b> on Test. The model chosen on Validation is shown in bold.</p>
 {table(test_tbl, 'metrics')}
-{figure('mae', 4, f"Test MAE per model and city (labels: MAE reduction vs Persistence). The best model cuts MAE by {b('Hanoi', 'reduction'):.1f}% in Hanoi ({b('Hanoi', 'model')}; the two tree ensembles are within {abs(hn_tree.diff().iloc[-1]):.2f} µg/m³ of each other) and by {b('HCMC', 'reduction'):.1f}% in HCMC ({b('HCMC', 'model')}), where the tree models gain only {hc_tree.min():.1f}–{hc_tree.max():.1f}%. There is no single best model for both cities.")}
+{figure('mae', 4, f"Test MAE per model and city (labels: MAE reduction vs Persistence). The model chosen on Validation cuts MAE by {b('Hanoi', 'reduction'):.1f}% in Hanoi ({b('Hanoi', 'model')}; the two tree ensembles are within {abs(hn_tree.diff().iloc[-1]):.2f} µg/m³ of each other on Test, i.e. tied) and by {b('HCMC', 'reduction'):.1f}% in HCMC ({b('HCMC', 'model')}), where the tree models gain only {hc_tree.min():.1f}–{hc_tree.max():.1f}%. There is no single best model for both cities.")}
 {figure('forecast', 5, 'First 14 days of the Test set (time axis = forecast time). The models follow the level and daily rhythm better than Persistence, but smooth out short spikes.')}
 <p><b>Answer to question 1.</b> Machine learning helps in both cities, by about {b('Hanoi', 'reduction'):.0f}% (Hanoi) and {b('HCMC', 'reduction'):.0f}% (HCMC) in MAE.
 Hanoi benefits from non-linear models (interactions of rain, season and recent dust); HCMC is best served by a linear model.
@@ -253,8 +257,8 @@ Absolute MAE should not be compared between cities because the Test periods diff
 reliable early-warning tool. The error also grows at the end of the Test period (HCMC: 3.2 µg/m³ in late June → 10.9 in September) when pollution rises
 again, and HCMC's error peaks in the daytime (9.9 µg/m³ at 14h).</p>
 {figure('importance', 7, f"Permutation importance on Test (MAE increase when a feature is shuffled). Hanoi: {top_txt['Hanoi']}. HCMC: {top_txt['HCMC']}.")}
-<p><b>Answer to question 2.</b> The current PM2.5 level matters most in both cities. Beyond it, Hanoi depends on rain over the last 24h and humidity
-(weather regimes, wash-out), while HCMC depends on temperature, hour of day and wind speed (daily traffic rhythm and dispersion). This matches the EDA
+<p><b>Answer to question 2.</b> The current PM2.5 level matters most in both cities. Beyond it, Hanoi depends on its recent PM2.5 history, rain over the last 24h and the season
+(seasonal regime, wash-out), while HCMC depends on temperature, hour of day and wind speed (daily traffic rhythm and dispersion). This matches the EDA
 and supports training a separate model per city. Hanoi is the harder city in absolute terms (higher volatility and winter peaks), while HCMC gives the
 smaller relative gain over the baseline.</p>
 

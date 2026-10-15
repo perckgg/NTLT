@@ -4,6 +4,8 @@ md("""
 
 ### 4.1. Results on the independent Test set
 Each model is retrained on Train + Validation (with its hyperparameters fixed) and evaluated **once** on Test.
+The **best model of each city is chosen on the Validation set** (lowest Validation MAE, Section 3.2), not on Test,
+so the Test set is used only for reporting and the error analysis below is not biased by model selection.
 """)
 
 code("""
@@ -14,6 +16,9 @@ display(test_results.set_index(['city', 'model']).style.format(
     {'MAE': '{:.2f}', 'RMSE': '{:.2f}', 'R2': '{:.3f}', 'MAE reduction vs baseline': '{:+.1%}'}))
 print('Test:', {c: f.test.index.min().strftime('%Y-%m-%d') + ' → ' + f.test.index.max().strftime('%Y-%m-%d')
                 for c, f in forecasters.items()})
+ml_val = val_results[val_results.model != 'Persistence (baseline)']
+best_model = ml_val.loc[ml_val.groupby('city')['MAE'].idxmin()].set_index('city')['model']
+print('Best model (chosen on Validation):', best_model.to_dict())
 """)
 
 md("""
@@ -40,13 +45,11 @@ md(note("CREATIVE"))
 
 md("""
 ### 4.3. Forecast vs. actual
-**Figure 7 – First 14 days of the Test set:** actual values, the baseline and the best model for each city
+**Figure 7 – First 14 days of the Test set:** actual values, the baseline and the best model of each city (chosen on Validation)
 (the time axis is the **forecast** time, i.e. $t + 24h$).
 """)
 
 code("""
-best_model = test_results.loc[test_results.groupby('city')['MAE'].idxmin()].set_index('city')['model']
-
 fig, axes = plt.subplots(2, 1, figsize=(14, 8))
 for ax, (city, f) in zip(axes, forecasters.items()):
     p = f.test_predictions
