@@ -1,25 +1,25 @@
-# Phần 3: Phân tích và mô hình hóa
+# Section 3: analysis and modeling
 md("""
-## 3. PHÂN TÍCH VÀ MÔ HÌNH HÓA
+## 3. ANALYSIS AND MODELING
 
-### 3.1. Các mô hình so sánh
-| Mô hình | Vai trò | Lý do chọn |
+### 3.1. Models compared
+| Model | Role | Why |
 |---|---|---|
-| **Persistence (baseline)** | `ŷ(t+24) = pm25(t)` | Baseline chuẩn cho chuỗi thời gian: mô hình ML phải **thắng** được nó mới có giá trị |
-| **Ridge Regression** | Tuyến tính có regularization | Đơn giản, dễ giải thích; kiểm tra mức độ quan hệ tuyến tính |
-| **Random Forest** | Ensemble cây (bagging) | Bắt được quan hệ phi tuyến, tương tác thời tiết × giờ |
-| **HistGradientBoosting** | Ensemble cây (boosting) | Mạnh và nhanh trên dữ liệu bảng lớn |
+| **Persistence (baseline)** | `ŷ(t+24) = pm25(t)` | Standard time series baseline: an ML model is only useful if it **beats** it |
+| **Ridge Regression** | Regularized linear model | Simple and interpretable; tests how linear the relationship is |
+| **Random Forest** | Tree ensemble (bagging) | Captures non-linear effects and weather × hour interactions |
+| **HistGradientBoosting** | Tree ensemble (boosting) | Strong and fast on large tabular data |
 
-**Tối ưu siêu tham số:** `GridSearchCV` với `TimeSeriesSplit(n_splits=3)` trên tập train (fold validation luôn nằm
-**sau** fold train), tiêu chí `MAE`. Random Forest dùng cấu hình cố định (giới hạn `max_depth`, `min_samples_leaf`
-để chống overfit) nhằm giữ thời gian chạy hợp lý trên Colab.
+**Hyperparameter tuning:** `GridSearchCV` with `TimeSeriesSplit(n_splits=3)` on the training set (the validation fold always comes
+**after** the training fold), scored by `MAE`. Random Forest uses a fixed configuration (limited `max_depth` and `min_samples_leaf`
+against overfitting) to keep the run time reasonable on Colab.
 
-Lớp `CityForecaster` đóng gói toàn bộ quy trình cho **một** thành phố, để chạy lặp lại cho cả hai.
+The `CityForecaster` class wraps the whole workflow for **one** city so that it can be repeated for both.
 """)
 
 code("""
 class PersistenceBaseline(BaseEstimator, RegressorMixin):
-    \"\"\"Dự báo PM2.5 sau HORIZON giờ bằng giá trị hiện tại.\"\"\"
+    \"\"\"Forecast PM2.5 HORIZON hours ahead with the current value.\"\"\"
 
     def fit(self, X, y=None):
         return self
@@ -79,7 +79,7 @@ class CityForecaster:
         return pd.DataFrame(rows)
 
     def evaluate_on_test(self):
-        \"\"\"Huấn luyện lại trên Train + Validation rồi đánh giá một lần trên Test.\"\"\"
+        \"\"\"Retrain on Train + Validation, then evaluate once on Test.\"\"\"
         full = pd.concat([self.train, self.val])
         rows, self.test_predictions = [], pd.DataFrame({'actual': self.test[TARGET]})
         for name, m in self.models.items():
@@ -92,16 +92,17 @@ class CityForecaster:
 
 forecasters = {city: CityForecaster(city, *parts).tune() for city, parts in splits.items()}
 for city, f in forecasters.items():
-    print(f'{city} – siêu tham số tốt nhất:')
+    print(f'{city} – best hyperparameters:')
     for name, params in f.best_params.items():
         print(f'   {name}: {params}')
 """)
 
-md("### 3.2. So sánh trên tập Validation")
+md("### 3.2. Comparison on the Validation set")
 
 code("""
 val_results = pd.concat([f.evaluate_on_validation() for f in forecasters.values()], ignore_index=True)
-display(val_results.pivot(index='model', columns='city', values=['MAE', 'RMSE', 'R2']).round(3))
+val_table = val_results.pivot(index='model', columns='city', values=['MAE', 'RMSE', 'R2'])
+display(val_table.reindex(columns=list(CITY_FILES), level=1).reindex(list(make_models())).round(3))
 """)
 
 md(note("VAL"))

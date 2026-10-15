@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PM2.5 Forecasting — Part 3</title>
+<meta name="description" content="Part 3 (Time Series) of the course project: 24-hour-ahead PM2.5 forecasting for Hanoi and Ho Chi Minh City.">
+<style>
+:root{--bg:#ffffff;--fg:#1d2433;--muted:#5b6475;--line:#d9dee7;--accent:#b4232c;--soft:#f4f6fa;--link:#1f5fae}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#12151c;--fg:#e6e9ef;--muted:#a3abba;--line:#2c3340;--accent:#f0717a;--soft:#1b2029;--link:#7fb0f0}}
+:root[data-theme="dark"]{--bg:#12151c;--fg:#e6e9ef;--muted:#a3abba;--line:#2c3340;--accent:#f0717a;--soft:#1b2029;--link:#7fb0f0}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:"DejaVu Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;line-height:1.55}
+main{max-width:920px;margin:0 auto;padding:24px 16px 64px}
+a{color:var(--link)}
+h1{font-size:1.75rem;line-height:1.25;margin:.2em 0 .4em}
+h2{font-size:1.25rem;margin:1.8em 0 .5em;padding-bottom:.25em;border-bottom:2px solid var(--line)}
+.kicker{color:var(--accent);font-weight:600;font-size:.85rem;letter-spacing:.02em;margin:0}
+.meta{color:var(--muted);margin:.2em 0;font-size:.95rem}
+.summary{background:var(--soft);border-left:4px solid var(--accent);padding:12px 16px;margin:16px 0;border-radius:4px}
+.summary p{margin:0}
+.links{padding-left:1.2em}
+table{border-collapse:collapse;width:100%;margin:12px 0;font-size:.9rem;display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:6px 9px;text-align:left;white-space:nowrap}
+td{white-space:normal}
+th{background:var(--soft)}
+figure{margin:18px 0}
+figure img{width:100%;height:auto;border:1px solid var(--line);border-radius:4px;background:#fff}
+figcaption{font-size:.88rem;color:var(--muted);margin-top:6px}
+code{font-family:"DejaVu Sans Mono",ui-monospace,Menlo,Consolas,monospace;font-size:.88em;background:var(--soft);padding:0 3px;border-radius:3px}
+.note{font-size:.85rem;color:var(--muted)}
+nav.top{font-size:.9rem;margin-bottom:12px}
+</style>
+</head>
+<body>
+<main>
+<nav class="top"><a href="../">← Group landing page</a> · <a href="https://github.com/perckgg/NTLT">Repository</a></nav>
+
+<header class="title">
+  <p class="kicker">Programming Foundations for Data Analysis and Visualization · Semester 261 (2026–2027)</p>
+  <h1>Part 3 — Time Series: 24-Hour-Ahead PM2.5 Forecasting, Hanoi vs Ho Chi Minh City</h1>
+  <p class="meta">Ho Chi Minh City University of Technology (HCMUT) – VNU-HCM · Faculty of Computer Science and Engineering ·
+  Instructor: Lê Thành Sách</p>
+  <p class="meta"><b>Data type:</b> Time series · <b>Group:</b> [Group name]</p>
+</header>
+
+<table class="members"><thead><tr><th>Member</th><th>Student ID</th><th>Contribution</th></tr></thead><tbody><tr><td>[Full name]</td><td>[Student ID]</td><td>Data collection, notebook, report</td></tr></tbody></table>
+
+<ul class="links">
+  <li><a href="https://github.com/perckgg/NTLT/blob/main/03_TimeSeries/notebooks/03_TimeSeries_Air_Quality.ipynb">Notebook on GitHub</a> · <a href="https://colab.research.google.com/github/perckgg/NTLT/blob/main/03_TimeSeries/notebooks/03_TimeSeries_Air_Quality.ipynb">Open in Google Colab</a> (Run all)</li>
+  <li><a href="https://github.com/perckgg/NTLT/blob/main/03_TimeSeries/result/03_TimeSeries_Air_Quality_executed.ipynb">Executed copy with all outputs</a> · <a href="https://github.com/perckgg/NTLT/tree/main/03_TimeSeries/data/timeseries">Dataset (CSV)</a></li>
+  <li><a href="report/03_TimeSeries_Report.pdf">PDF report</a> · YouTube presentation: <i>to be added</i></li>
+</ul>
+
+<div class="summary">
+  <p><b>In one paragraph.</b> We collected 22 months of hourly PM2.5 (OpenAQ) and weather (Open-Meteo) data for one station in Hanoi and one in
+  Ho Chi Minh City (HCMC), and forecast PM2.5 24 hours ahead. On an untouched, chronologically last Test set, the best model (chosen on Validation) lowers the MAE of the
+  naive Persistence forecast by <b>13.1% in Hanoi</b> (RandomForest, 8.32 → 7.23 µg/m³)
+  and by <b>10.6% in HCMC</b> (Ridge, 9.53 → 8.52 µg/m³),
+  and predicts the correct US EPA air quality level in 82.2% / 76.4% of hours.
+  The best model type differs by city, and both models under-forecast polluted hours.</p>
+</div>
+
+<h2>1. Problem and questions</h2>
+<p>At hour <i>t</i>, using the PM2.5 history and the current weather, forecast PM2.5 at <i>t</i> + 24h (the same hour tomorrow) —
+a time series regression problem. Hanoi (four seasons, winter temperature inversion) and HCMC (wet/dry seasons) have different pollution
+mechanisms, so we apply the <b>same pipeline to each city independently</b> and ask:</p>
+<ol>
+  <li>How much better than a naive baseline can machine learning forecast PM2.5 one day ahead in each city?</li>
+  <li>Which city is harder to forecast, and what drives PM2.5 in each place?</li>
+</ol>
+<p>Every model must beat the <b>Persistence</b> baseline ŷ(<i>t</i>+24) = pm25(<i>t</i>), which here is also the 24h seasonal-naive forecast.</p>
+
+<h2>2. Dataset (self-collected)</h2>
+<table>
+<thead><tr><th>Component</th><th>Source</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td>PM2.5 – Hanoi</td><td>OpenAQ v3, station <i>46 Luu Quang Vu</i> (Hanoi Air Quality Monitoring Network)</td><td>City monitoring station; 32.8% of hours missing</td></tr>
+<tr><td>PM2.5 – HCMC</td><td>OpenAQ v3, station <i>CMT8</i> (AirGradient)</td><td>Low-cost sensor; 8.4% of hours missing</td></tr>
+<tr><td>Weather</td><td>Open-Meteo Historical Weather API</td><td>Temperature, humidity, precipitation, wind speed/direction, pressure, cloud cover</td></tr>
+</tbody></table>
+<p>Period 01/12/2024 – 30/09/2026: <b>16,056 hourly rows × 11 columns per city</b> on a complete hourly grid (Vietnam time), where hours without a
+measurement are <code>NaN</code>. The crawler (<code>scripts/crawl_air_quality.py</code>) is reproducible and falls back to Open-Meteo Air Quality (CAMS) if
+no OpenAQ key is available.</p>
+<p><b>Key EDA findings.</b> Mean PM2.5 is similar (31.7 vs 32.1 µg/m³) and exceeds the WHO 24h guideline (15 µg/m³) in 56% (Hanoi) and 82% (HCMC) of hours,
+but the shapes differ: Hanoi is more volatile (std 20.6 vs 16.3) with a strong winter peak (January 55 vs August 19 µg/m³), and correlates with
+temperature (−0.31) and pressure (+0.31); HCMC has a narrower seasonal range, a 7h rush-hour peak and its strongest link to wind speed (−0.36).
+The autocorrelation drops from 0.92 / 0.88 at lag 1h to 0.56 / 0.45 at lag 24h, so a day-ahead forecast is much harder than a next-hour one.</p>
+<figure><img src="report/figures/daily.png" alt="Figure 1"><figcaption><b>Figure 1.</b> Daily mean PM2.5 against the WHO 24h guideline. Hanoi has a pronounced winter peak and a large gap in late 2025; HCMC is more stable.</figcaption></figure>
+<figure><img src="report/figures/cycle.png" alt="Figure 2"><figcaption><b>Figure 2.</b> Mean PM2.5 by hour of day, dry/cool vs wet/hot half-year. HCMC peaks at 7h (traffic), Hanoi in the evening (≈34 µg/m³ at 22h, night-time inversion).</figcaption></figure>
+
+<h2>3. Data preparation</h2>
+<ul>
+<li><b>Cleaning:</b> negative or &gt; 1000 µg/m³ values and "stuck sensor" runs (≥ 6 identical hours) are set to missing (none were found).</li>
+<li><b>Missing values:</b> only short gaps (≤ 6h) are interpolated in time — missing PM2.5 falls from 32.8% → 26.0% (Hanoi) and 8.4% → 7.3% (HCMC).
+Longer gaps are not filled (that would fabricate data); samples without a target are dropped, remaining feature gaps use a median <code>SimpleImputer</code> fitted on Train.</li>
+<li><b>Outliers:</b> the IQR rule (k = 3) flags 146 (1.23%) and 122 (0.82%) hours. They are real pollution events, so they stay in the <i>target</i>;
+only the PM2.5 <i>features</i> are clipped by a custom <code>IQRClipper</code> transformer learned on Train.</li>
+<li><b>Features (23):</b> PM2.5 lags (0–23h) and rolling statistics, weather at <i>t</i> plus 24h rain total, cyclic hour of the forecast time (numerical,
+<code>StandardScaler</code>), and season, day of week and 8-sector wind direction (categorical, <code>OneHotEncoder</code>) — 39 columns after encoding.
+Calendar features describe the target time <i>t</i> + 24h, which is known in advance, so they do not leak.</li>
+<li><b>Split:</b> chronological 70 / 15 / 15 Train / Validation / Test with a 24h gap before each boundary, so no target leaks into the next set.
+All preprocessing lives in one <code>ColumnTransformer</code> + <code>Pipeline</code> fitted on Train only.</li>
+</ul>
+<figure><img src="report/figures/split.png" alt="Figure 3"><figcaption><b>Figure 3.</b> Chronological split per city. The Test periods differ (Hanoi 19/03/2026 → 29/09/2026, HCMC 29/06/2026 → 29/09/2026) because Hanoi has more missing data, and both fall in the cleaner season.</figcaption></figure>
+
+<h2>4. Modeling</h2>
+<p>Models: <b>Persistence</b> (baseline), <b>Ridge</b>, <b>RandomForest</b> and <b>HistGradientBoosting</b>. Ridge and HGB are tuned with
+<code>GridSearchCV</code> on <code>TimeSeriesSplit(3)</code> (MAE); RandomForest uses a fixed, regularized configuration. A <code>CityForecaster</code>
+class runs the whole flow for one city. Validation results (used to compare models and <b>choose the best model of each city</b>,
+so the Test set is never used for selection):</p>
+<table class=""><thead><tr><th>Model</th><th>MAE Hanoi</th><th>MAE HCMC</th><th>R² Hanoi</th><th>R² HCMC</th></tr></thead><tbody><tr><td>Persistence (baseline)</td><td>14.97</td><td>7.71</td><td>-0.063</td><td>-0.154</td></tr><tr><td>Ridge</td><td>12.61</td><td>7.07</td><td>0.337</td><td>0.144</td></tr><tr><td>RandomForest</td><td>12.45</td><td>7.57</td><td>0.318</td><td>0.065</td></tr><tr><td>HistGradientBoosting</td><td>12.47</td><td>7.45</td><td>0.293</td><td>0.087</td></tr></tbody></table>
+<p>All ML models beat the baseline on Validation in both cities. The baseline's R² is negative: copying today's value is worse than predicting the mean.
+In HCMC the signal is weak (R² ≤ 0.15) and the strongly regularized Ridge (alpha = 100) is best.
+Selected models: <b>RandomForest</b> for Hanoi and <b>Ridge</b> for HCMC.</p>
+
+<h2>5. Results on the Test set</h2>
+<p>Each model is retrained on Train + Validation and evaluated <b>once</b> on Test. The model chosen on Validation is shown in bold.</p>
+<table class="metrics"><thead><tr><th>City</th><th>Model</th><th>MAE (µg/m³)</th><th>RMSE (µg/m³)</th><th>R²</th><th>MAE vs baseline</th></tr></thead><tbody><tr><td>Hanoi</td><td>Persistence (baseline)</td><td>8.32</td><td>11.61</td><td>-0.200</td><td>+0.0%</td></tr><tr><td>Hanoi</td><td>Ridge</td><td>7.27</td><td>9.92</td><td>0.124</td><td>+12.6%</td></tr><tr><td>Hanoi</td><td><b>RandomForest</b></td><td><b>7.23</b></td><td>9.57</td><td>0.184</td><td>+13.1%</td></tr><tr><td>Hanoi</td><td>HistGradientBoosting</td><td>7.20</td><td>9.63</td><td>0.175</td><td>+13.5%</td></tr><tr><td>HCMC</td><td>Persistence (baseline)</td><td>9.53</td><td>12.94</td><td>0.079</td><td>+0.0%</td></tr><tr><td>HCMC</td><td><b>Ridge</b></td><td><b>8.52</b></td><td>11.40</td><td>0.286</td><td>+10.6%</td></tr><tr><td>HCMC</td><td>RandomForest</td><td>8.80</td><td>11.74</td><td>0.243</td><td>+7.6%</td></tr><tr><td>HCMC</td><td>HistGradientBoosting</td><td>8.69</td><td>11.57</td><td>0.264</td><td>+8.7%</td></tr></tbody></table>
+<figure><img src="report/figures/mae.png" alt="Figure 4"><figcaption><b>Figure 4.</b> Test MAE per model and city (labels: MAE reduction vs Persistence). The model chosen on Validation cuts MAE by 13.1% in Hanoi (RandomForest; the two tree ensembles are within 0.03 µg/m³ of each other on Test, i.e. tied) and by 10.6% in HCMC (Ridge), where the tree models gain only 7.6–8.7%. There is no single best model for both cities.</figcaption></figure>
+<figure><img src="report/figures/forecast.png" alt="Figure 5"><figcaption><b>Figure 5.</b> First 14 days of the Test set (time axis = forecast time). The models follow the level and daily rhythm better than Persistence, but smooth out short spikes.</figcaption></figure>
+<p><b>Answer to question 1.</b> Machine learning helps in both cities, by about 13% (Hanoi) and 11% (HCMC) in MAE.
+Hanoi benefits from non-linear models (interactions of rain, season and recent dust); HCMC is best served by a linear model.
+Absolute MAE should not be compared between cities because the Test periods differ; relative improvement over the baseline is the fair comparison.</p>
+
+<h2>6. Error analysis and drivers</h2>
+<p>PM2.5 forecasts are mapped to US EPA 2024 levels (Good ≤ 9, Moderate ≤ 35.4, USG ≤ 55.4, Unhealthy ≤ 125.4 µg/m³) to build a level confusion matrix.</p>
+<figure><img src="report/figures/aqi.png" alt="Figure 6"><figcaption><b>Figure 6.</b> AQI-level confusion matrix of the best model. Correct level: 82.2% (Hanoi) and 76.4% (HCMC); within ±1 level: 99.1% / 98.6%. Most errors are polluted hours forecast as 'Moderate', and 'Good' is never predicted.</figcaption></figure>
+<p>The main weakness is <b>under-forecasting polluted hours</b>: forecasts are pulled towards the mean, so the model follows the trend but is not yet a
+reliable early-warning tool. The error also grows at the end of the Test period (HCMC: 3.2 µg/m³ in late June → 10.9 in September) when pollution rises
+again, and HCMC's error peaks in the daytime (9.9 µg/m³ at 14h).</p>
+<figure><img src="report/figures/importance.png" alt="Figure 7"><figcaption><b>Figure 7.</b> Permutation importance on Test (MAE increase when a feature is shuffled). Hanoi: <code>pm25_lag_0</code> (0.32), <code>pm25_roll_mean_6</code> (0.25), <code>rain_24h</code> (0.12), <code>pm25_lag_6</code> (0.09), <code>season</code> (0.05). HCMC: <code>pm25_lag_0</code> (1.06), <code>temperature_2m</code> (0.90), <code>hour_cos</code> (0.36), <code>wind_speed_10m</code> (0.32), <code>relative_humidity_2m</code> (0.14).</figcaption></figure>
+<p><b>Answer to question 2.</b> The current PM2.5 level matters most in both cities. Beyond it, Hanoi depends on its recent PM2.5 history, rain over the last 24h and the season
+(seasonal regime, wash-out), while HCMC depends on temperature, hour of day and wind speed (daily traffic rhythm and dispersion). This matches the EDA
+and supports training a separate model per city. Hanoi is the harder city in absolute terms (higher volatility and winter peaks), while HCMC gives the
+smaller relative gain over the baseline.</p>
+
+<h2>7. Conclusions, limitations and future work</h2>
+<ul>
+<li><b>Conclusion:</b> one reusable pipeline, trained independently per city, beats the baseline by 13.1% (Hanoi) and
+10.6% (HCMC) in Test MAE and gets the AQI level right in 76–82% of hours.</li>
+<li><b>Limitations:</b> one station per city (HCMC is a low-cost sensor); Hanoi's Test set contains no winter; only 22 months of data
+(fewer than two seasonal cycles); weather features are observations at <i>t</i>, not forecasts for <i>t</i> + 24h; polluted hours are under-forecast.</li>
+<li><b>Future work:</b> add weather forecasts and more stations; weight high-pollution hours or add an exceedance classifier for early warning;
+try SARIMAX, multi-horizon LightGBM or LSTM once longer data is available.</li>
+</ul>
+<p class="note">All numbers in this report are read automatically from the executed notebook (scikit-learn 1.9.1, random_state = 42).
+Tree-model results can shift by a few hundredths of µg/m³ across scikit-learn versions; Ridge and the baseline do not change.</p>
+
+</main>
+</body>
+</html>

@@ -8,7 +8,9 @@ Course project for **Programming Foundations for Data Analysis and Visualization
 | **Data** | Self-collected via API: hourly PM2.5 (OpenAQ) + weather (Open-Meteo), 01/12/2024 – 30/09/2026, 16,056 hours per city |
 | **Notebook** | [`notebooks/03_TimeSeries_Air_Quality.ipynb`](notebooks/03_TimeSeries_Air_Quality.ipynb) — runs end-to-end on Colab (Run all) |
 | **Executed copy (with outputs)** | [`result/03_TimeSeries_Air_Quality_executed.ipynb`](result/03_TimeSeries_Air_Quality_executed.ipynb) |
-| **Result (Test)** | Hanoi — RandomForest: MAE 8.32 → **7.16 µg/m³ (−13.9%)**; HCMC — Ridge: MAE 9.53 → **8.52 µg/m³ (−10.6%)** vs. Persistence baseline; correct AQI level 82.6% / 76.4% |
+| **Result (Test)** | Best model per city chosen on Validation. Hanoi — RandomForest: MAE 8.32 → **7.23 µg/m³ (−13.1%)**; HCMC — Ridge: MAE 9.53 → **8.52 µg/m³ (−10.6%)** vs. Persistence baseline; correct AQI level 82.2% / 76.4% |
+| **PDF report** | [`report/03_TimeSeries_Report.pdf`](report/03_TimeSeries_Report.pdf) |
+| **Web page (GitHub Pages)** | [`index.html`](index.html) |
 
 ## 1. Approach
 
@@ -26,7 +28,7 @@ Every model must beat the **Persistence** baseline `ŷ(t+24) = pm25(t)` (equival
 |---|---|
 | **1. Data description & EDA** | Data sources and column table; descriptive statistics, missing rate, % of hours above the WHO 24h guideline (15 µg/m³); daily series, hourly distribution, monthly boxplots, diurnal cycle by half-year, Spearman correlation with weather |
 | **2. Data preparation** | Missing report (gap lengths); cleaning invalid and "stuck sensor" values; time interpolation for short gaps only (≤ 6h); IQR outlier detection; feature engineering (lags, rolling stats, weather, cyclic hour, season, wind sector); **chronological 70/15/15 split with a 24h gap**; `ColumnTransformer` pipeline with a custom `IQRClipper` |
-| **3. Modeling** | Persistence baseline, Ridge, RandomForest, HistGradientBoosting; `GridSearchCV` with `TimeSeriesSplit(3)` (MAE); comparison on Validation; a `CityForecaster` class runs the whole flow for one city |
+| **3. Modeling** | Persistence baseline, Ridge, RandomForest, HistGradientBoosting; `GridSearchCV` with `TimeSeriesSplit(3)` (MAE); comparison on Validation, which also **selects the best model per city** (Test is used only for reporting); a `CityForecaster` class runs the whole flow for one city |
 | **4. Summary** | Retrain on Train + Validation, evaluate **once** on Test; MAE comparison figure; forecast vs. actual; error analysis by hour, month and **AQI-level confusion matrix**; permutation importance; inference function `predict_next`; conclusions, limitations, future work |
 
 ### Key decisions and evidence
@@ -43,10 +45,10 @@ Every model must beat the **Persistence** baseline `ŷ(t+24) = pm25(t)` (equival
 ## 3. What is special (creativity)
 
 1. **Two-city comparison with one shared pipeline.** The Test figure shows each model's MAE per city, labeled with % improvement over the baseline.
-   The best model differs: non-linear RandomForest in Hanoi, linear Ridge in HCMC → there is **no single best model for both cities**.
+   The best model differs: non-linear tree ensembles in Hanoi (RandomForest 7.23 ≈ HGB 7.20 on Test), linear Ridge in HCMC (tree models gain only 7.6–8.7%) → there is **no single best model for both cities**.
 2. **Error analysis translated into AQI levels.** Forecasts are mapped to US EPA PM2.5 levels to build a confusion matrix:
-   82.6% / 76.4% correct level, 99.1% / 98.6% within ±1 level. The main weakness is **under-forecasting polluted hours**
-   (HCMC: 281/359 "Unhealthy for sensitive groups" hours predicted as "Moderate"), so the model is not yet reliable as an early-warning tool.
+   82.2% / 76.4% correct level, 99.1% / 98.6% within ±1 level. The main weakness is **under-forecasting polluted hours**
+   (HCMC: 281 of 359 "Unhealthy for Sensitive Groups" hours predicted as "Moderate"), so the model is not yet reliable as an early-warning tool.
 3. **Feature importance matches the EDA.** Current PM2.5 matters most in both cities; after that, Hanoi depends on **rain over the last 24h and season**,
    while HCMC depends on **temperature, hour of day and wind speed**.
 4. **Real, self-collected data with real gaps** (not a ready-made Kaggle file), with a reproducible crawler and an automatic fallback source.
@@ -59,7 +61,7 @@ Every model must beat the **Persistence** baseline `ŷ(t+24) = pm25(t)` (equival
 
 | Component | Source | Notes |
 |---|---|---|
-| PM2.5 – Hanoi | [OpenAQ v3](https://openaq.org) – station *Số 46 Lưu Quang Vũ* (Hanoi Air Quality Monitoring Network, sensor 7772032) | City monitoring station, has real gaps (32.8% missing) |
+| PM2.5 – Hanoi | [OpenAQ v3](https://openaq.org) – station *46 Luu Quang Vu* (Hanoi Air Quality Monitoring Network, sensor 7772032) | City monitoring station, has real gaps (32.8% missing) |
 | PM2.5 – HCMC | OpenAQ v3 – station *CMT8* (AirGradient, sensor 11357424) | Low-cost sensor (8.4% missing) |
 | Weather | [Open-Meteo Historical Weather API](https://open-meteo.com) | Temperature, humidity, precipitation, wind speed/direction, pressure, cloud cover |
 
@@ -71,6 +73,8 @@ If no OpenAQ key is available, it falls back to the Open-Meteo Air Quality API (
 ```
 03_TimeSeries/
 ├── README.md
+├── index.html                           # GitHub Pages sub-page for this part (generated)
+├── VIDEO_SCRIPT.md                      # outline for the 5–10 minute presentation video
 ├── data/timeseries/
 │   ├── air_quality_hanoi.csv            # hourly PM2.5 + weather, Hanoi
 │   └── air_quality_hcmc.csv             # hourly PM2.5 + weather, HCMC
@@ -78,6 +82,10 @@ If no OpenAQ key is available, it falls back to the Open-Meteo Air Quality API (
 │   └── 03_TimeSeries_Air_Quality.ipynb  # submission notebook (no outputs)
 ├── result/
 │   └── 03_TimeSeries_Air_Quality_executed.ipynb   # executed copy with all outputs
+├── report/
+│   ├── build_report.py                  # builds the PDF report + index.html from the executed notebook
+│   ├── 03_TimeSeries_Report.pdf         # PDF report (generated)
+│   └── figures/                         # figures exported from the notebook (generated)
 └── scripts/
     ├── crawl_air_quality.py             # collects data from OpenAQ + Open-Meteo
     ├── generate_timeseries_notebook.py  # generates the notebook from the parts below
@@ -99,9 +107,15 @@ if they are not found, it downloads them from `GITHUB_RAW_BASE` (set it to the g
 $env:OPENAQ_API_KEY = "<your-key>"           # free key from openaq.org; never commit it
 py scripts\crawl_air_quality.py              # (optional) re-download the data
 py scripts\generate_timeseries_notebook.py   # regenerate the notebook after editing nb_parts/
+jupyter nbconvert --to notebook --execute --output-dir result --output 03_TimeSeries_Air_Quality_executed.ipynb notebooks\03_TimeSeries_Air_Quality.ipynb
+py report\build_report.py                    # rebuild the PDF report and index.html (needs weasyprint)
 ```
+Every number in the PDF report and the web page is read from the executed notebook, so they always match it.
+Fill in `GROUP_NAME`, `MEMBERS` and `VIDEO_URL` at the top of `report/build_report.py` before the final build.
 Required libraries: `numpy`, `pandas`, `matplotlib`, `seaborn`, `scikit-learn` (≥ 1.2). A full run takes about 1–2 minutes.
 Re-crawling may change the numbers slightly (OpenAQ can backfill data); in that case, re-run the notebook and update `notes.py`.
+Tree-model results (RandomForest, HGB) can shift by a few hundredths of µg/m³ between scikit-learn versions; Ridge and the baseline do not change.
+The reference run used scikit-learn 1.9.1 (printed in the first code cell).
 
 ## 7. Limitations and future work
 
@@ -113,7 +127,11 @@ Re-crawling may change the numbers slightly (OpenAQ can backfill data); in that 
 
 ## 8. Before submitting
 
-- [ ] Fill in the group name and member in the first notebook cell.
+- [ ] Fill in the group name and member in the first notebook cell (`scripts/nb_parts/part1_overview.py`) and in `report/build_report.py`.
 - [x] Set `GITHUB_RAW_BASE` to the group's repo (`perckgg/NTLT`, branch `main`) and push the `data/timeseries/` CSV files.
-- [ ] Run all on Colab and save the copy with outputs.
-- [ ] Prepare the PDF report and video (5–10 minutes). Numbers in the report must match the notebook.
+- [ ] Merge this work into `main`, then check that *Run all* works from the "Open in Google Colab" link.
+- [x] Executed copy with outputs saved in `result/`.
+- [x] PDF report (`report/03_TimeSeries_Report.pdf`), generated from the executed notebook.
+- [x] Sub-page for GitHub Pages (`index.html`) with links to the notebook, Colab, PDF and video.
+- [ ] Record the video (outline in `VIDEO_SCRIPT.md`), upload it to YouTube as Public/Unlisted, set `VIDEO_URL` and rebuild.
+- [ ] Link this page from the group landing page and enable GitHub Pages for the repository.
