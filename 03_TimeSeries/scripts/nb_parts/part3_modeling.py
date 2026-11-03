@@ -5,14 +5,17 @@ md("""
 ### 3.1. Models compared
 | Model | Role | Why |
 |---|---|---|
-| **Persistence (baseline)** | `ŷ(t+24) = pm25(t)` | Standard time series baseline: an ML model is only useful if it **beats** it |
+| **Persistence (baseline)** | `ŷ(t+24) = pm25(t)` | Standard time series baseline (= 24h seasonal naive) |
+| **Mean 24h (baseline)** | `ŷ(t+24) = mean(pm25[t-23 … t])` | Smooths out the noise of a single hour |
+| **Naive blend (baseline)** | `ŷ = w·pm25(t) + (1−w)·mean_24h(t)` | The **strongest naive baseline**: `w` is learned on the training data (grid 0, 0.05, …, 1, minimizing MAE). An ML model is only really useful if it beats **this** one, not just Persistence |
 | **Ridge Regression** | Regularized linear model | Simple and interpretable; tests how linear the relationship is |
 | **Random Forest** | Tree ensemble (bagging) | Captures non-linear effects and weather × hour interactions |
 | **HistGradientBoosting** | Tree ensemble (boosting) | Strong and fast on large tabular data |
 
-**Hyperparameter tuning:** `GridSearchCV` with `TimeSeriesSplit(n_splits=3)` on the training set (the validation fold always comes
-**after** the training fold), scored by `MAE`. Random Forest uses a fixed configuration (limited `max_depth` and `min_samples_leaf`
-against overfitting) to keep the run time reasonable on Colab.
+**Hyperparameter tuning:** `GridSearchCV` with `TimeSeriesSplit(n_splits=3, gap=24)` on the training set, scored by `MAE`.
+The validation fold always comes **after** the training fold, and the `gap` drops 24 samples between them so that the targets
+(24h ahead) of the last training samples do not fall inside the validation fold. All three ML models are tuned
+(Random Forest with a small grid to keep the run time reasonable on Colab).
 
 The `CityForecaster` class wraps the whole workflow for **one** city so that it can be repeated for both.
 """)
@@ -28,6 +31,41 @@ class PersistenceBaseline(BaseEstimator, RegressorMixin):
         return np.asarray(X['pm25_lag_0'], dtype=float)
 
 
+class MeanBaseline(BaseEstimator, RegressorMixin):
+    \"\"\"Forecast PM2.5 HORIZON hours ahead with the mean of the last 24 hours.\"\"\"
+
+    def fit(self, X, y=None):
+        return self
+
+    def predict(self, X):
+        return np.asarray(X['pm25_roll_mean_24'].fillna(X['pm25_lag_0']), dtype=float)
+
+
+class NaiveBlend(BaseEstimator, RegressorMixin):
+    \"\"\"w·(current value) + (1 − w)·(24h mean); w is chosen on the fitted data to minimize MAE.\"\"\"
+
+    def __init__(self, weights=tuple(np.round(np.linspace(0, 1, 21), 2))):
+        self.weights = weights
+
+    @staticmethod
+    def _parts(X):
+        now = np.asarray(X['pm25_lag_0'], dtype=float)
+        return now, np.asarray(X['pm25_roll_mean_24'].fillna(X['pm25_lag_0']), dtype=float)
+
+    def fit(self, X, y):
+        now, mean24 = self._parts(X)
+        maes = [np.mean(np.abs(np.asarray(y) - (w * now + (1 - w) * mean24))) for w in self.weights]
+        self.w_ = float(self.weights[int(np.argmin(maes))])
+        return self
+
+    def predict(self, X):
+        now, mean24 = self._parts(X)
+        return self.w_ * now + (1 - self.w_) * mean24
+
+
+BASELINES = ['Persistence (baseline)', 'Mean 24h (baseline)', 'Naive blend (baseline)']
+
+
 def regression_metrics(y_true, y_pred):
     return {'MAE': mean_absolute_error(y_true, y_pred),
             'RMSE': np.sqrt(mean_squared_error(y_true, y_pred)),
@@ -37,6 +75,8 @@ def regression_metrics(y_true, y_pred):
 def make_models():
     return {
         'Persistence (baseline)': PersistenceBaseline(),
+        'Mean 24h (baseline)': MeanBaseline(),
+        'Naive blend (baseline)': NaiveBlend(),
         'Ridge': Pipeline([('pre', build_preprocessor()), ('model', Ridge())]),
         'RandomForest': Pipeline([('pre', build_preprocessor()), ('model', RandomForestRegressor(
             n_estimators=200, max_depth=12, min_samples_leaf=10, max_features=0.5,
@@ -48,6 +88,8 @@ def make_models():
 
 PARAM_GRIDS = {
     'Ridge': {'model__alpha': [0.1, 1, 10, 100]},
+    'RandomForest': {'model__max_depth': [8, 12],
+                     'model__min_samples_leaf': [10, 30]},
     'HistGradientBoosting': {'model__learning_rate': [0.03, 0.1],
                              'model__max_iter': [200, 400],
                              'model__max_leaf_nodes': [15, 31],
@@ -63,7 +105,7 @@ class CityForecaster:
 
     def tune(self):
         for name, grid in PARAM_GRIDS.items():
-            search = GridSearchCV(self.models[name], grid, cv=TimeSeriesSplit(n_splits=3),
+            search = GridSearchCV(self.models[name], grid, cv=TimeSeriesSplit(n_splits=3, gap=HORIZON),
                                   scoring='neg_mean_absolute_error', n_jobs=-1)
             search.fit(self.train[FEATURES], self.train[TARGET])
             self.models[name] = search.best_estimator_
@@ -95,6 +137,8 @@ for city, f in forecasters.items():
     print(f'{city} – best hyperparameters:')
     for name, params in f.best_params.items():
         print(f'   {name}: {params}')
+    blend = f.models['Naive blend (baseline)'].fit(f.train[FEATURES], f.train[TARGET])
+    print(f'   Naive blend: w = {blend.w_:.2f} (weight of the current value, learned on Train)')
 """)
 
 md("### 3.2. Comparison on the Validation set")

@@ -8,7 +8,7 @@ Course project for **Programming Foundations for Data Analysis and Visualization
 | **Data** | Self-collected via API: hourly PM2.5 (OpenAQ) + weather (Open-Meteo), 01/12/2024 – 30/09/2026, 16,056 hours per city |
 | **Notebook** | [`notebooks/03_TimeSeries_Air_Quality.ipynb`](notebooks/03_TimeSeries_Air_Quality.ipynb) — runs end-to-end on Colab (Run all) |
 | **Executed copy (with outputs)** | [`result/03_TimeSeries_Air_Quality_executed.ipynb`](result/03_TimeSeries_Air_Quality_executed.ipynb) |
-| **Result (Test)** | Best model per city chosen on Validation. Hanoi — RandomForest: MAE 8.32 → **7.23 µg/m³ (−13.1%)**; HCMC — Ridge: MAE 9.53 → **8.52 µg/m³ (−10.6%)** vs. Persistence baseline; correct AQI level 82.2% / 76.4% |
+| **Result (Test)** | Best model per city chosen on Validation, scored on measured values only. Hanoi — RandomForest: **8.08 µg/m³, −12.5% vs. the Naive blend baseline** (−16.4% vs. Persistence); HCMC — Ridge: **8.54 µg/m³, −5.6% vs. Naive blend** (−10.9% vs. Persistence); correct AQI level 80.8% / 76.4% |
 | **PDF report** | [`report/03_TimeSeries_Report.pdf`](report/03_TimeSeries_Report.pdf) |
 | **Web page (GitHub Pages)** | [`index.html`](index.html) |
 
@@ -20,42 +20,46 @@ Instead of merging the two cities, we apply **the same pipeline** to each city *
 1. **How much better than a naive baseline can machine learning forecast PM2.5 one day ahead in each city?**
 2. **Which city is harder to forecast, and what drives PM2.5 in each place?**
 
-Every model must beat the **Persistence** baseline `ŷ(t+24) = pm25(t)` (equivalent to a 24h seasonal-naive forecast) to be considered useful.
+Three naive baselines set the bar: **Persistence** `ŷ(t+24) = pm25(t)` (equivalent to a 24h seasonal-naive forecast), the **24h mean**, and a
+**Naive blend** `w·pm25(t) + (1−w)·mean_24h(t)` with `w` learned on Train. A model is only useful if it beats the strongest one (the Naive blend) —
+comparing only with Persistence overstates the gain.
 
 ## 2. Method (following the 4 required sections)
 
 | Section | Main content |
 |---|---|
 | **1. Data description & EDA** | Data sources and column table; descriptive statistics, missing rate, % of hours above the WHO 24h guideline (15 µg/m³); daily series, hourly distribution, monthly boxplots, diurnal cycle by half-year, Spearman correlation with weather |
-| **2. Data preparation** | Missing report (gap lengths); cleaning invalid and "stuck sensor" values; time interpolation for short gaps only (≤ 6h); IQR outlier detection; feature engineering (lags, rolling stats, weather, cyclic hour, season, wind sector); **chronological 70/15/15 split with a 24h gap**; `ColumnTransformer` pipeline with a custom `IQRClipper` |
-| **3. Modeling** | Persistence baseline, Ridge, RandomForest, HistGradientBoosting; `GridSearchCV` with `TimeSeriesSplit(3)` (MAE); comparison on Validation, which also **selects the best model per city** (Test is used only for reporting); a `CityForecaster` class runs the whole flow for one city |
-| **4. Summary** | Retrain on Train + Validation, evaluate **once** on Test; MAE comparison figure; forecast vs. actual; error analysis by hour, month and **AQI-level confusion matrix**; permutation importance; inference function `predict_next`; conclusions, limitations, future work |
+| **2. Data preparation** | Missing report (gap lengths); cleaning invalid (≤ 0, > 1000) and "stuck sensor" values; **causal forward-fill (≤ 6h) for features only, targets are always measured values**; IQR outlier detection; feature engineering (lags, rolling stats, weather, cyclic hour, season, wind sector); **chronological 70/15/15 split with a 24h gap**; `ColumnTransformer` pipeline with a custom `IQRClipper` |
+| **3. Modeling** | Three naive baselines (Persistence, 24h mean, Naive blend), Ridge, RandomForest, HistGradientBoosting; `GridSearchCV` with `TimeSeriesSplit(3, gap=24)` (MAE) for all three ML models; comparison on Validation, which also **selects the best model per city** (Test is used only for reporting); a `CityForecaster` class runs the whole flow for one city |
+| **4. Summary** | Retrain on Train + Validation, evaluate **once** on Test; MAE comparison figure; forecast vs. actual; error analysis by hour, month and **AQI-level confusion matrix**; single and **grouped** permutation importance; inference function `predict_next`; conclusions, limitations, future work |
 
 ### Key decisions and evidence
 
 | Decision | Reason |
 |---|---|
 | Model each city separately | Different seasonality (Hanoi winter peak ~3× August; HCMC narrower range), different daily peaks (Hanoi 22h, HCMC 7h) and different weather drivers |
-| Interpolate only gaps ≤ 6h; drop samples with missing targets | PM2.5 changes smoothly over a few hours, but filling long gaps would fabricate data (Hanoi is 32.8% missing, mostly from late 2025) |
+| No interpolation: causal forward-fill (≤ 6h) for features, measured values only for targets | Time interpolation fills a gap with the value measured *after* it — unknown at forecast time (it would leak up to 6h of the future into ~22% of Hanoi's Test features) — and interpolated targets are easier to predict, which would flatter the Test score. Long gaps are not filled (Hanoi is 32.8% missing, 31–97% per month from 11/2025) |
 | Keep PM2.5 peaks in the target, clip only the features (`IQRClipper`) | Peaks are real pollution events; removing them would make evaluation look better than it is |
-| Chronological split + 24h gap, `TimeSeriesSplit` for tuning | Shuffling would leak the future into the past; the gap keeps a set's targets out of the next set |
+| Chronological split + 24h gap, `TimeSeriesSplit(gap=24)` for tuning | Shuffling would leak the future into the past; the gap keeps a set's (and a CV fold's) targets out of the next one |
 | Calendar features computed for the **target** time ($t+24h$) | The hour/season of the forecast moment is known in advance, so this does not leak |
 | MAE as the main metric | Easy to interpret in µg/m³ and robust to the heavy right tail |
 
 ## 3. What is special (creativity)
 
-1. **Two-city comparison with one shared pipeline.** The Test figure shows each model's MAE per city, labeled with % improvement over the baseline.
-   The best model differs: non-linear tree ensembles in Hanoi (RandomForest 7.23 ≈ HGB 7.20 on Test), linear Ridge in HCMC (tree models gain only 7.6–8.7%) → there is **no single best model for both cities**.
+1. **Two-city comparison with one shared pipeline, against an honest baseline.** The Test figure shows each model's MAE per city, labeled with the % reduction vs. the Naive blend.
+   Against Persistence ML looks like −16% / −11%; against the Naive blend the real gain is **−12.5% in Hanoi (RandomForest) and only −5.6% in HCMC (Ridge)**.
+   In HCMC the tree models are worse than the blend on Validation and only 3–4% better on Test → there is **no single best model for both cities**.
 2. **Error analysis translated into AQI levels.** Forecasts are mapped to US EPA PM2.5 levels to build a confusion matrix:
-   82.2% / 76.4% correct level, 99.1% / 98.6% within ±1 level. The main weakness is **under-forecasting polluted hours**
-   (HCMC: 281 of 359 "Unhealthy for Sensitive Groups" hours predicted as "Moderate"), so the model is not yet reliable as an early-warning tool.
-3. **Feature importance matches the EDA.** Current PM2.5 matters most in both cities; after that, Hanoi depends on **rain over the last 24h and season**,
-   while HCMC depends on **temperature, hour of day and wind speed**.
+   80.8% / 76.4% correct level, 98.5% / 98.6% within ±1 level. The main weakness is **under-forecasting polluted hours**
+   (HCMC: 285 of 359 "Unhealthy for Sensitive Groups" hours predicted as "Moderate"; Hanoi: none of 40 "Unhealthy" hours correct), so the model is not yet reliable as an early-warning tool.
+3. **Feature importance, single and grouped.** Correlated lag features share their importance, so groups are also shuffled together.
+   Recent PM2.5 is the most important group in both cities; HCMC then depends on **temperature, hour of day and wind speed**,
+   Hanoi on **weather**, with the calendar adding almost nothing on its (end-of-winter) Test period.
 4. **Real, self-collected data with real gaps** (not a ready-made Kaggle file), with a reproducible crawler and an automatic fallback source.
 5. **Reproducible:** the notebook is generated by a script; every observation is written from real run results (`random_state = 42`).
 
-> Note: the two Test periods differ (Hanoi 19/03–29/09/2026, HCMC 29/06–29/09/2026, because Hanoi has more missing data) and both fall in the cleaner season,
-> so we compare the **relative improvement over the baseline**, not absolute MAE between cities.
+> Note: the two Test periods differ (Hanoi 26/02–29/09/2026, HCMC 30/06–29/09/2026, because Hanoi has more missing data), and Hanoi's Test set has almost
+> no afternoon hours (the station rarely reports 14h–19h after late 2025), so we compare the **relative improvement over the baseline**, not absolute MAE between cities.
 
 ## 4. Data sources
 
@@ -114,15 +118,16 @@ Every number in the PDF report and the web page is read from the executed notebo
 Fill in `GROUP_NAME`, `MEMBERS` and `VIDEO_URL` at the top of `report/build_report.py` before the final build.
 Required libraries: `numpy`, `pandas`, `matplotlib`, `seaborn`, `scikit-learn` (≥ 1.2). A full run takes about 1–2 minutes.
 Re-crawling may change the numbers slightly (OpenAQ can backfill data); in that case, re-run the notebook and update `notes.py`.
-Tree-model results (RandomForest, HGB) can shift by a few hundredths of µg/m³ between scikit-learn versions; Ridge and the baseline do not change.
+Tree-model results (RandomForest, HGB) can shift by a few hundredths of µg/m³ between scikit-learn versions; Ridge and the naive baselines do not change.
 The reference run used scikit-learn 1.9.1 (printed in the first code cell).
 
 ## 7. Limitations and future work
 
 - One station per city; the HCMC station is a low-cost sensor that may be less accurate at high humidity.
-- Only 22 months of data (fewer than 2 seasonal cycles); Hanoi's Test period contains no winter.
+- Only 22 months of data (fewer than 2 seasonal cycles); Hanoi's Validation/Test periods fall in the degraded-data period (from 11/2025): small, no afternoon hours, only the end of winter.
+- Differences between the best models are small and not yet tested statistically (block bootstrap / Diebold–Mariano).
 - Weather features use observations at $t$, not weather forecasts for $t+24h$.
-- Future work: add weather forecasts and more stations, weight high-pollution hours (or add an exceedance classifier for early warning),
+- Future work: add weather forecasts and more stations, quantile regression or an exceedance classifier for early warning, a shared calendar split for both cities,
   and try dedicated time series models (SARIMAX, multi-horizon LightGBM, LSTM) with longer data.
 
 ## 8. Before submitting

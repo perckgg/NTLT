@@ -43,29 +43,34 @@ plt.show()
 md("""
 ### 2.2. Cleaning invalid values and handling missing data
 
-- **Invalid values:** negative PM2.5 or > 1000 µg/m³ are sensor errors → set to `NaN`.
+- **Invalid values:** PM2.5 ≤ 0 or > 1000 µg/m³ are sensor errors → set to `NaN`
+  (a reference monitor reporting exactly 0.0 is a dropout, not clean air).
 - **"Stuck" sensor:** the same value repeated for ≥ 6 consecutive hours (with PM2.5 > 0) indicates a frozen device → set to `NaN`.
-- **Short gaps (≤ 6 hours):** time-based linear interpolation (`interpolate(method='time', limit=6)`) —
-  reasonable because PM2.5 changes smoothly over a few hours.
-- **Long gaps (> 6 hours):** **not** interpolated (that would fabricate data) → samples whose *target* is missing are dropped;
+- **No look-ahead when filling.** Time interpolation (`interpolate(method='time')`) fills a gap using the value measured **after**
+  the gap, which is not known yet at forecast time $t$. If the features were built from interpolated values, the model would
+  see up to 6 hours of the future (in Hanoi's Test period this would affect ~22% of the samples). We therefore keep two versions:
+  - `pm25_raw` — the measured values only. **The target is always a measured value** (never filled), so the evaluation is done on real data.
+  - `pm25` — `pm25_raw` **forward-filled for at most 6 hours** (`ffill(limit=6)`): "the last known value, if it is at most 6h old".
+    This is causal (uses only data ≤ $t$) and is used to build the features.
+- **Long gaps (> 6 hours):** not filled (that would fabricate data) → samples whose current value or target is missing are dropped;
   remaining missing features are handled by `SimpleImputer` (median, fitted on the training set) inside the pipeline.
 """)
 
 code("""
-MAX_INTERP_GAP = 6
+MAX_FILL_GAP = 6
 STUCK_HOURS = 6
 
 
 def clean_city(df):
     df = df.copy()
     pm = df['pm25']
-    invalid = (pm < 0) | (pm > 1000)
+    invalid = (pm <= 0) | (pm > 1000)
     run_id = (pm != pm.shift()).cumsum()
     run_len = pm.groupby(run_id).transform('size')
     stuck = (run_len >= STUCK_HOURS) & (pm > 0) & pm.notna()
     df.loc[invalid | stuck, 'pm25'] = np.nan
-    df['pm25_raw'] = df['pm25']
-    df['pm25'] = df['pm25'].interpolate(method='time', limit=MAX_INTERP_GAP, limit_area='inside')
+    df['pm25_raw'] = df['pm25']                                # measured values only (used for the target)
+    df['pm25'] = df['pm25_raw'].ffill(limit=MAX_FILL_GAP)      # causal fill (used for the features)
     return df, int(invalid.sum()), int(stuck.sum())
 
 
@@ -73,11 +78,11 @@ clean = {}
 for city, df in raw.items():
     clean[city], n_invalid, n_stuck = clean_city(df)
     before, after = df['pm25'].isna().mean(), clean[city]['pm25'].isna().mean()
-    print(f'{city}: {n_invalid} negative/>1000 values, {n_stuck} stuck-sensor hours | '
-          f'missing PM2.5: {before:.1%} → {after:.1%} after cleaning + interpolation')
+    print(f'{city}: {n_invalid} values ≤ 0 or > 1000, {n_stuck} stuck-sensor hours | '
+          f'missing PM2.5: {before:.1%} → {after:.1%} after cleaning + causal forward-fill (features only)')
 
 
-def first_short_gap(series, min_len=3, max_len=MAX_INTERP_GAP):
+def first_short_gap(series, min_len=3, max_len=MAX_FILL_GAP):
     is_na = series.isna()
     groups = (is_na != is_na.shift()).cumsum()
     sizes = is_na.groupby(groups).transform('sum')
@@ -92,9 +97,9 @@ for city in clean:
 if gap_time is not None:
     window = clean[city].loc[gap_time - pd.Timedelta('36h'): gap_time + pd.Timedelta('36h')]
     fig, ax = plt.subplots(figsize=(12, 4))
-    ax.plot(window.index, window['pm25'], 'o--', color='orange', label='After interpolation')
-    ax.plot(window.index, window['pm25_raw'], 'o-', color=CITY_COLORS[city], label='Original data')
-    ax.set(title=f'Short-gap interpolation example – {city}', ylabel='PM2.5 (µg/m³)')
+    ax.step(window.index, window['pm25'], where='post', ls='--', color='orange', label='Forward-filled (feature input)')
+    ax.plot(window.index, window['pm25_raw'], 'o-', color=CITY_COLORS[city], label='Measured (pm25_raw, target)')
+    ax.set(title=f'Causal forward-fill of a short gap – {city}', ylabel='PM2.5 (µg/m³)')
     ax.legend()
     plt.show()
 """)
@@ -112,12 +117,12 @@ def iqr_bounds(s, k=3.0):
 
 fig, axes = plt.subplots(1, 2, figsize=(14, 4))
 for ax, (city, df) in zip(axes, clean.items()):
-    lo, hi = iqr_bounds(df['pm25'])
-    out = df.loc[df['pm25'] > hi, 'pm25']
+    lo, hi = iqr_bounds(df['pm25_raw'])
+    out = df.loc[df['pm25_raw'] > hi, 'pm25_raw']
     top_days = out.resample('D').count().nlargest(3).index.strftime('%Y-%m-%d').tolist()
     print(f'{city}: upper bound = {hi:.1f} µg/m³ | {len(out)} outlier hours '
-          f'({len(out) / df.pm25.notna().sum():.2%}) | days with most outliers: {top_days}')
-    ax.plot(df.index, df['pm25'], lw=0.4, color=CITY_COLORS[city])
+          f'({len(out) / df.pm25_raw.notna().sum():.2%}) | days with most outliers: {top_days}')
+    ax.plot(df.index, df['pm25_raw'], lw=0.4, color=CITY_COLORS[city])
     ax.scatter(out.index, out, s=6, color='k', label='Outlier (IQR, k=3)')
     ax.axhline(hi, color='k', ls='--', lw=1)
     ax.set(title=city, ylabel='PM2.5 (µg/m³)')
@@ -136,7 +141,8 @@ to reduce the influence of extreme values on the linear model.
 md("""
 ### 2.4. Feature engineering
 
-Each sample at time $t$ has target `y = pm25(t + 24h)`. Only information **available at $t$** is used (no future leakage):
+Each sample at time $t$ has target `y = pm25_raw(t + 24h)` (a **measured** value). The features are built from the forward-filled
+series and use only information **available at $t$** (no future leakage):
 
 | Group | Features | Type |
 |---|---|---|
@@ -192,9 +198,9 @@ def build_features(df, city, horizon=HORIZON):
 
 
 def make_dataset(df, city, horizon=HORIZON):
-    \"\"\"Add target = pm25(t + horizon); keep only samples with a target and a current value.\"\"\"
+    \"\"\"Add target = measured pm25_raw(t + horizon); keep only samples with a target and a current value.\"\"\"
     X = build_features(df, city, horizon)
-    X[TARGET] = df['pm25'].shift(-horizon)
+    X[TARGET] = df['pm25_raw'].shift(-horizon)
     return X.dropna(subset=[TARGET, 'pm25_lag_0'])
 
 
