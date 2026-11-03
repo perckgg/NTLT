@@ -53,6 +53,7 @@ FIGURES = {
     "cycle": "plot_df['half_year']",
     "split": "def time_split(",
     "mae": "MODEL_ORDER = list(make_models())",
+    "boot": "# Forest plot of the bootstrap confidence intervals",
     "forecast": "fig, axes = plt.subplots(2, 1, figsize=(14, 8))",
     "aqi": "AQI_BINS = ",
     "importance": "fig, axes = plt.subplots(1, 2, figsize=(16, 5))\nfor ax, (city, f) in zip(axes, forecasters.items()):\n    model",
@@ -123,9 +124,13 @@ def load_results():
     window = {c: (int(n), float(mb), m, float(mm), float(sf), float(sa)) for c, n, mb, m, mm, sf, sa in re.findall(
         r"(\w+) – first 14 days of Test \((\d+) hours\): MAE Naive blend ([\d.]+) vs (\w+) ([\d.]+) \| "
         r"std of forecast ([\d.]+) vs actual ([\d.]+)", all_text)}
+    boot = {(c, st, b): (float(g), float(lo), float(hi)) for c, st, b, g, lo, hi in re.findall(
+        r"BOOT \| (\w+) \| (\w+) \| \w+ vs ([^|]+?) \| gain ([+-][\d.]+)% \[([+-][\d.]+)%, ([+-][\d.]+)%\]", all_text)}
+    sens = {c: re.findall(r"(\d)-day blocks \(\d+\): \[([+-][\d.]+)%, ([+-][\d.]+)%\]", line)
+            for c, line in re.findall(r"^(\w+): (1-day blocks.*)$", all_text, flags=re.M)}
     samples = {c: int(n.replace(",", "")) for c, n in re.findall(r"(\w+): ([\d,]+) samples \| 23 features", all_text)}
     return {"test": test, "val": val, "aqi": aqi, "periods": periods, "top": top, "sklearn": versions, "best": best,
-            "groups": groups, "blend_w": blend_w, "outliers": outliers, "missing": missing, "samples": samples, "err": err, "split": split, "window": window}
+            "groups": groups, "blend_w": blend_w, "outliers": outliers, "missing": missing, "samples": samples, "err": err, "split": split, "window": window, "boot": boot, "sens": sens}
 
 
 # ---------------------------------------------------------------- HTML building blocks
@@ -188,7 +193,18 @@ def build_body(r, for_pdf):
     top_txt = {c: ", ".join(f"<code>{esc(k)}</code> ({v:.2f})" for k, v in top[c].items()) for c in CITIES}
     grp_txt = {c: ", ".join(f"{esc(k)} +{v:.2f}" for k, v in groups[c].items()) for c in CITIES}
     hc_months = list(err["HCMC"][4].items())
-    sp, win = r["split"], r["window"]
+    sp, win, bt, sens = r["split"], r["window"], r["boot"], r["sens"]
+
+    def ci(city, st, vs):
+        g, lo, hi = bt[(city, st, vs)]
+        txt = f"{g:+.1f}% [{lo:+.1f}, {hi:+.1f}]"
+        return f"<b>{txt}</b>" if lo > 0 or hi < 0 else txt
+
+    second_ml = {"Hanoi": "Ridge", "HCMC": "RandomForest"}
+    boot_rows = [(c, f"{r['best'][c]} vs {vs}", ci(c, "Validation", vs), ci(c, "Test", vs))
+                 for c in CITIES for vs in ("Persistence (baseline)", "Naive blend (baseline)", second_ml[c])]
+    boot_tbl = pd.DataFrame(boot_rows, columns=["City", "Comparison", "Validation gain [95% CI]", "Test gain [95% CI]"])
+    sens_txt = "; ".join(f"{c}: " + ", ".join(f"{L}-day [{lo}, {hi}]%" for L, lo, hi in sens[c]) for c in CITIES)
     split_txt = "; ".join(f"{c}: {sp[c][0]:,} / {sp[c][1]:,} / {sp[c][2]:,} samples, mean target {sp[c][3]:.1f} → {sp[c][4]:.1f} → {sp[c][5]:.1f} µg/m³"
                           for c in CITIES)
     win_txt = "; ".join(f"{c}: {win[c][2]} {win[c][3]:.2f} vs Naive blend {win[c][1]:.2f} ({win[c][0]} hours)" for c in CITIES)
@@ -279,20 +295,26 @@ Selected models: <b>{r['best']['Hanoi']}</b> for Hanoi and <b>{r['best']['HCMC']
 <p>Each model is retrained on Train + Validation and evaluated <b>once</b> on Test. The model chosen on Validation is shown in bold. "Gain" = MAE reduction relative to the reference (+ = better).</p>
 {table(test_tbl, 'metrics')}
 {figure('mae', 4, f"Test MAE per model and city (labels: MAE reduction vs the Naive blend; + = better, − = worse). The model chosen on Validation cuts MAE by {b('Hanoi', 'vs_blend'):.1f}% in Hanoi ({b('Hanoi', 'model')}) and by {b('HCMC', 'vs_blend'):.1f}% in HCMC ({b('HCMC', 'model')}) relative to the blend; in HCMC the tree models gain only {hc_blend.min():.1f}–{hc_blend.max():.1f}%. There is no single best model for both cities.")}
-{figure('forecast', 5, f"First 14 days of the Test set (time axis = forecast time). MAE in this window — {win_txt}: a clear gain in Hanoi, a tie in HCMC. The forecasts are much smoother than reality (std of forecast vs actual, µg/m³: {std_txt}), so short spikes are missed.")}
+{figure('forecast', 6, f"First 14 days of the Test set (time axis = forecast time). MAE in this window — {win_txt}: a clear gain in Hanoi, a tie in HCMC. The forecasts are much smoother than reality (std of forecast vs actual, µg/m³: {std_txt}), so short spikes are missed.")}
+<p><b>Are the differences real?</b> Forecast errors are strongly autocorrelated, so an ordinary bootstrap over hours would be far too optimistic.
+We use a <b>paired block bootstrap</b>: Test (or Validation) hours are grouped into 3-day calendar blocks, whole blocks are resampled 2,000 times,
+and the MAE gain of the best model over each competitor is recomputed on the same hours. Bold = the 95% interval excludes 0.</p>
+{table(boot_tbl)}
+{figure('boot', 5, f"MAE gain of the best model of each city over every competitor, with 95% block-bootstrap intervals (hollow = Validation, filled = Test). Against the naive baselines, only the Test gains in Hanoi (both) and over Persistence in HCMC clear zero; the HCMC gain over the Naive blend ({bt[('HCMC', 'Test', 'Naive blend (baseline)')][0]:+.1f}%) does not, for any block length (Test vs Naive blend by block length — {sens_txt}). Ridge's lead over the tree models in HCMC is significant on Validation; the ML models of Hanoi cannot be separated.")}
 <p><b>Answer to question 1.</b> Against plain Persistence, machine learning looks like a {b('Hanoi', 'reduction'):.0f}% / {b('HCMC', 'reduction'):.0f}% gain,
-but part of that comes from simply smoothing the current value. Against the best naive forecast the gain is about <b>{b('Hanoi', 'vs_blend'):.0f}% in Hanoi</b>
-and only <b>{b('HCMC', 'vs_blend'):.0f}% in HCMC</b>, where only the linear Ridge model adds a consistent improvement.
-In Hanoi the best model is a tree ensemble, but its lead over the other ML models is small.
+but part of that comes from simply smoothing the current value. Against the best naive forecast the gain is about <b>{b('Hanoi', 'vs_blend'):.0f}% in Hanoi</b>,
+which is statistically solid, and <b>{b('HCMC', 'vs_blend'):.0f}% in HCMC</b>, which is <b>not</b> distinguishable from zero: in HCMC we cannot claim that
+machine learning beats a well-chosen naive forecast. In HCMC the tree models are significantly worse than Ridge on Validation; in Hanoi the bootstrap
+cannot separate the ML models, so the choice of RandomForest there is not established.
 Absolute MAE should not be compared between cities because the Test periods differ; relative improvement over the baseline is the fair comparison.</p>
 
 <h2>6. Error analysis and drivers</h2>
 <p>PM2.5 forecasts are mapped to US EPA 2024 levels (Good ≤ 9, Moderate ≤ 35.4, USG ≤ 55.4, Unhealthy ≤ 125.4 µg/m³) to build a level confusion matrix.</p>
-{figure('aqi', 6, f"AQI-level confusion matrix of the best model. Correct level: {aqi['Hanoi'][0]:.1f}% (Hanoi) and {aqi['HCMC'][0]:.1f}% (HCMC); within ±1 level: {aqi['Hanoi'][1]:.1f}% / {aqi['HCMC'][1]:.1f}%. Most errors are polluted hours forecast as 'Moderate', and 'Good' is never predicted.")}
+{figure('aqi', 7, f"AQI-level confusion matrix of the best model. Correct level: {aqi['Hanoi'][0]:.1f}% (Hanoi) and {aqi['HCMC'][0]:.1f}% (HCMC); within ±1 level: {aqi['Hanoi'][1]:.1f}% / {aqi['HCMC'][1]:.1f}%. Most errors are polluted hours forecast as 'Moderate', and 'Good' is never predicted.")}
 <p>The main weakness is <b>under-forecasting polluted hours</b>: forecasts are pulled towards the mean, so the model follows the trend but is not yet a
 reliable early-warning tool. The error also grows at the end of the Test period (HCMC: {hc_months[0][1]:.1f} µg/m³ in {hc_months[0][0]} → {hc_months[-1][1]:.1f} in {hc_months[-1][0]})
 when pollution rises again, and HCMC's error peaks in the daytime ({err['HCMC'][2]:.1f} µg/m³ at {err['HCMC'][3]}h).</p>
-{figure('importance', 7, f"Permutation importance on Test (MAE increase when a feature is shuffled). Hanoi: {top_txt['Hanoi']}. HCMC: {top_txt['HCMC']}. Correlated PM2.5 lag features share their importance, so groups are also shuffled together — Hanoi: {grp_txt['Hanoi']}; HCMC: {grp_txt['HCMC']}.")}
+{figure('importance', 8, f"Permutation importance on Test (MAE increase when a feature is shuffled). Hanoi: {top_txt['Hanoi']}. HCMC: {top_txt['HCMC']}. Correlated PM2.5 lag features share their importance, so groups are also shuffled together — Hanoi: {grp_txt['Hanoi']}; HCMC: {grp_txt['HCMC']}.")}
 <p><b>Answer to question 2.</b> Recent PM2.5 is the most important group in both cities. HCMC then depends on temperature, hour of day and wind speed
 (daily traffic rhythm and dispersion), matching the EDA. In Hanoi, PM2.5 history and weather matter while the calendar adds almost nothing on a Test period
 that covers only the end of winter. Hanoi is the harder city in absolute terms (higher volatility and winter peaks), while HCMC gives the
@@ -300,14 +322,15 @@ smaller relative gain over the naive forecast.</p>
 
 <h2>7. Conclusions, limitations and future work</h2>
 <ul>
-<li><b>Conclusion:</b> one reusable pipeline, trained independently per city, beats the strongest naive forecast by {b('Hanoi', 'vs_blend'):.1f}% (Hanoi) and
-{b('HCMC', 'vs_blend'):.1f}% (HCMC) in Test MAE ({b('Hanoi', 'reduction'):.1f}% / {b('HCMC', 'reduction'):.1f}% vs Persistence) and gets the AQI level right in
+<li><b>Conclusion:</b> one reusable pipeline, trained independently per city, lowers the Test MAE of the strongest naive forecast
+by {ci('Hanoi', 'Test', 'Naive blend (baseline)')} in Hanoi and by {ci('HCMC', 'Test', 'Naive blend (baseline)')} in HCMC (gain [95% block-bootstrap CI]; the HCMC gain is not significant;
+vs Persistence: {b('Hanoi', 'reduction'):.1f}% / {b('HCMC', 'reduction'):.1f}%, both significant), and gets the AQI level right in
 {min(a[0] for a in aqi.values()):.0f}–{max(a[0] for a in aqi.values()):.0f}% of hours.</li>
 <li><b>Limitations:</b> one station per city (HCMC is a low-cost sensor); Hanoi has 31–97% missing hours per month from November 2025, so its Validation/Test sets are small,
-lack afternoon hours and contain only the end of winter; only 22 months of data (fewer than two seasonal cycles); differences between the best models are small and
-not yet tested statistically; weather features are observations at <i>t</i>, not forecasts for <i>t</i> + 24h; polluted hours are under-forecast.</li>
+lack afternoon hours and contain only the end of winter; only 22 months of data (fewer than two seasonal cycles); the Validation sets are too small to
+separate the ML models, so the model selection itself is uncertain; weather features are observations at <i>t</i>, not forecasts for <i>t</i> + 24h; polluted hours are under-forecast.</li>
 <li><b>Future work:</b> add weather forecasts and more stations; quantile regression or an exceedance classifier for early warning;
-block-bootstrap confidence intervals and a shared calendar split for both cities; SARIMAX, multi-horizon LightGBM or LSTM once longer data is available.</li>
+a longer history and a shared calendar split for both cities; SARIMAX, multi-horizon LightGBM or LSTM once longer data is available.</li>
 </ul>
 <p class="note">All numbers in this report are read automatically from the executed notebook (scikit-learn {r['sklearn']}, random_state = 42).
 Tree-model results can shift by a few hundredths of µg/m³ across scikit-learn versions; Ridge and the naive baselines do not change.</p>

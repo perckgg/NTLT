@@ -27,8 +27,8 @@ NOTES = {
   with a weak signal (R² ≤ 0.15), the strongly regularized linear model (alpha = 100) overfits less.
 - GridSearch (with a 24h `gap` between CV folds) picks a small learning rate (0.03) for HGB and large leaves (`min_samples_leaf` = 30) for RandomForest,
   i.e. it prefers simpler models — consistent with noisy data covering only 22 months.
-- The differences between the best ML models are small (Hanoi: RF 12.00 vs Ridge 12.10) and are measured on 1,462 (Hanoi) / 2,161 (HCMC) samples,
-  so the choice of model type should not be over-interpreted.
+- The differences between the best ML models are small (Hanoi: RF 12.00 vs Ridge 12.10) and are measured on 1,462 (Hanoi) / 2,161 (HCMC) samples.
+  Section 4.3 checks with block-bootstrap confidence intervals which of these differences are larger than chance.
 """,
 
 "CREATIVE": """
@@ -43,8 +43,7 @@ NOTES = {
 Comparing only with Persistence overstates the benefit of machine learning: part of the gain comes from simply smoothing the current value
 with its 24h mean. The honest answer to question 1 is therefore **≈ 12% in Hanoi and ≈ 6% in HCMC** beyond the best naive forecast.
 In HCMC the tree models are only 3.1–3.6% better than the blend on Test (and worse on Validation), so the linear Ridge model is the only one that adds a consistent gain.
-The best model type differs between cities, which supports training a separate model for each city — although in Hanoi
-the gap between RandomForest and the other two ML models (8.31–8.34) is small.
+Section 4.3 checks whether these gains are larger than chance: the Hanoi gain over the Naive blend is, the HCMC gain is not.
 
 Note: only **measured** PM2.5 values are used as targets (no interpolated targets), and the features use a causal forward-fill only.
 The two Test periods differ (Hanoi 26/02–29/09/2026, HCMC 30/06–29/09/2026, because Hanoi has more missing data), and Hanoi's Test set has
@@ -62,11 +61,35 @@ periods start earlier (Test 26/02/2026, vs 30/06/2026 for HCMC) — another reas
 """,
 
 "FORECAST": """
-**Figure 7 caption:** In Hanoi the best model clearly tracks the actual series better than the Naive blend in this window
+**Figure 8 caption:** In Hanoi the best model clearly tracks the actual series better than the Naive blend in this window
 (MAE 10.08 vs 12.98 µg/m³ over 203 hours with data). In HCMC the two are practically tied (Ridge 6.96 vs blend 6.81 over 335 hours) —
 consistent with the small overall gain in HCMC (Section 4.2). In both cities the forecast is much smoother than reality:
 its standard deviation is about half of the actual one (Hanoi 8.8 vs 16.3, HCMC 5.3 vs 9.5 µg/m³), so short spikes are missed.
-This is the visual counterpart of the under-forecasting of polluted hours in Section 4.4.
+This is the visual counterpart of the under-forecasting of polluted hours in Section 4.5.
+""",
+
+"BOOTSTRAP": """
+**Figure 7 caption — which differences are real?** (95% CI, 3-day blocks; *significant* = the interval excludes 0)
+
+| City | Comparison | Validation | Test |
+|---|---|---|---|
+| Hanoi | RandomForest vs Persistence | +10.9% [−5.4, +23.2] | **+16.4% [+8.3, +23.0]** |
+| Hanoi | RandomForest vs Naive blend | +7.8% [−9.2, +20.4] | **+12.5% [+3.2, +20.0]** |
+| Hanoi | RandomForest vs Ridge | +0.8% [−9.0, +8.9] | +3.1% [−0.3, +6.3] |
+| HCMC | Ridge vs Persistence | +8.2% [−0.8, +15.4] | **+10.9% [+4.4, +16.7]** |
+| HCMC | Ridge vs Naive blend | +0.5% [−8.8, +9.0] | +5.6% [−1.3, +11.8] |
+| HCMC | Ridge vs RandomForest | **+6.3% [+2.6, +10.1]** | +2.6% [−1.9, +6.8] |
+
+- **Hanoi:** the gain of RandomForest over both naive baselines on Test is real (vs the Naive blend: +12.5%, CI +3.2% to +20.0%),
+  and it stays positive for 1-, 3- and 7-day blocks. But RandomForest is **not** significantly better than Ridge or HGB (CIs include 0),
+  and on Validation no difference is significant at all — the Validation set (1,462 samples, 29 blocks) is too small to separate
+  the models, so picking RandomForest over Ridge (+0.8%) was close to a coin flip. *Machine learning helps in Hanoi; which ML model is best is not established.*
+- **HCMC:** Ridge is significantly better than Persistence on Test (+10.9%), but its gain over the Naive blend (+5.6%) is **not** significant
+  for any block length (the interval always reaches below 0). *We cannot claim that machine learning beats a well-chosen naive forecast in HCMC.*
+  Ridge does beat both tree models significantly on Validation (≈ +6%), and in the same direction on Test (+2–3%, not significant):
+  the evidence consistently says that **tree models do not help in HCMC**.
+- **Method note:** an i.i.d. bootstrap over single hours would give much narrower intervals and declare almost everything significant;
+  the blocks keep the strong hour-to-hour correlation of forecast errors, so the intervals are honest about how little independent evidence 3–7 months of data contain.
 """,
 
 "ERROR": """
@@ -104,20 +127,22 @@ have its own model.
   (causal forward-fill), and models are evaluated only on measured values.
 - On the Test set, the best model (chosen on Validation) lowers MAE by **12.5% in Hanoi (RandomForest)** and **5.6% in HCMC (Ridge)** compared with the
   strongest naive baseline (Naive blend), or by 16.4% / 10.9% compared with Persistence, and predicts the correct AQI level in 76–81% of hours.
-- Machine learning adds a clear gain in Hanoi; in HCMC the gain over a well-chosen naive forecast is small, and only the linear model achieves it consistently.
+- Block-bootstrap confidence intervals show that the Hanoi gain over the Naive blend is real (95% CI +3.2% to +20.0%), while the HCMC gain
+  over the Naive blend is not significant (−1.3% to +11.8%); in HCMC, tree models are significantly worse than Ridge on Validation.
+  Which ML model is best in Hanoi is not established (RandomForest vs Ridge: CI includes 0).
 
 **Limitations:**
 - Only **one station** per city. The HCMC station is a low-cost sensor (AirGradient) that may be less accurate at high humidity.
 - Hanoi has a lot of missing data (32.8%, and 31–97% per month from November 2025), so its Validation/Test sets are small, contain almost no afternoon hours,
   and the Test set covers only the end of winter.
 - Only 22 months of data (fewer than 2 seasonal cycles), so seasonal patterns are hard to learn.
-- Differences between the best models are small and no statistical test (e.g. block bootstrap, Diebold–Mariano) has been run yet.
+- The Validation sets are too small for the block bootstrap to separate the ML models, so the model selection itself is uncertain (Section 4.3).
 - The models under-forecast high-pollution episodes. Weather features use observations at $t$, not weather forecasts for $t+24h$.
 
 **Future work:**
 - Add **weather forecasts** for the target time and data from more stations in each city.
 - Use quantile regression / sample weights that emphasize high-pollution hours, or add an "exceeds threshold or not" classifier for early warning.
-- Add confidence intervals (block bootstrap) for the MAE differences, and use the same calendar split for both cities.
+- Collect a longer history so that Validation can separate the models, and use the same calendar split for both cities.
 - Try dedicated time series models (SARIMAX, multi-horizon LightGBM, LSTM) once longer data is available.
 """,
 }

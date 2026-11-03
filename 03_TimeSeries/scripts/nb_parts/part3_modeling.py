@@ -113,11 +113,12 @@ class CityForecaster:
         return self
 
     def evaluate_on_validation(self):
-        rows = []
+        rows, self.val_predictions = [], pd.DataFrame({'actual': self.val[TARGET]})
         for name, m in self.models.items():
             m.fit(self.train[FEATURES], self.train[TARGET])
-            rows.append({'city': self.city, 'model': name,
-                         **regression_metrics(self.val[TARGET], m.predict(self.val[FEATURES]))})
+            pred = m.predict(self.val[FEATURES])
+            self.val_predictions[name] = pred
+            rows.append({'city': self.city, 'model': name, **regression_metrics(self.val[TARGET], pred)})
         return pd.DataFrame(rows)
 
     def evaluate_on_test(self):

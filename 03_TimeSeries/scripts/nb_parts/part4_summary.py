@@ -47,8 +47,103 @@ plt.show()
 md(note("CREATIVE"))
 
 md("""
-### 4.3. Forecast vs. actual
-**Figure 7 – First 14 days of the Test set:** actual values, the Naive blend baseline and the best model of each city (chosen on Validation)
+### 4.3. Are the differences real? Block-bootstrap confidence intervals
+A Test set of 1,500–2,200 hours sounds large, but forecast errors are **strongly autocorrelated** (an error at 10h is very
+likely to be followed by a similar error at 11h), so the number of *independent* observations is much smaller, and an
+ordinary i.i.d. bootstrap over hours would give intervals that are far too narrow.
+
+We therefore use a **paired block bootstrap** (Künsch, 1989): the Test (or Validation) samples are grouped into consecutive
+**3-day calendar blocks** of forecast time, whole blocks are resampled with replacement (2,000 times), and the MAE gain
+$1 - \\mathrm{MAE}_A / \\mathrm{MAE}_B$ of the best model $A$ over each competitor $B$ is recomputed on the *same* resampled hours for both models.
+The 2.5% and 97.5% percentiles give a 95% confidence interval; if it excludes 0, the difference is unlikely to be luck.
+The block length is a judgment call (the daily mean error difference has a lag-1-day autocorrelation of about 0.1–0.4 and is small after that),
+so we also check 1-day and 7-day blocks.
+""")
+
+code("""
+BLOCK_DAYS = 3
+N_BOOT = 2000
+
+
+def block_bootstrap_gain(p, model_a, model_b, block_days=BLOCK_DAYS, n_boot=N_BOOT, seed=RANDOM_STATE):
+    \"\"\"Paired block bootstrap of the MAE gain of model_a over model_b, i.e. 1 - MAE_a / MAE_b.
+
+    p: DataFrame indexed by issue time t with an 'actual' column and one column per model.
+    Samples are grouped into consecutive calendar blocks of `block_days` days (forecast time t + HORIZON);
+    whole blocks are resampled with replacement, keeping the autocorrelation of the errors inside each block.
+    \"\"\"
+    t = p.index + pd.Timedelta(hours=HORIZON)
+    codes = pd.factorize(np.asarray((t - t.min()) // pd.Timedelta(days=block_days)))[0]
+    abs_err_a = np.bincount(codes, weights=np.abs(p[model_a] - p['actual']))   # error sum per block
+    abs_err_b = np.bincount(codes, weights=np.abs(p[model_b] - p['actual']))
+    k = len(abs_err_a)
+    counts = np.random.default_rng(seed).multinomial(k, np.full(k, 1 / k), size=n_boot)  # how often each block is drawn
+    gains = 1 - (counts @ abs_err_a) / (counts @ abs_err_b)
+    low, high = np.percentile(gains, [2.5, 97.5])
+    return {'gain': 1 - abs_err_a.sum() / abs_err_b.sum(), 'ci_low': low, 'ci_high': high, 'blocks': k}
+
+
+def competitors(city):
+    return ['Persistence (baseline)', 'Naive blend (baseline)'] + [
+        m for m in ['Ridge', 'RandomForest', 'HistGradientBoosting'] if m != best_model[city]]
+
+
+rows = []
+for city, f in forecasters.items():
+    for set_name, preds in [('Validation', f.val_predictions), ('Test', f.test_predictions)]:
+        for other in competitors(city):
+            rows.append({'city': city, 'set': set_name, 'model': best_model[city], 'vs': other,
+                         **block_bootstrap_gain(preds, best_model[city], other)})
+boot = pd.DataFrame(rows)
+boot['CI excludes 0'] = (boot['ci_low'] > 0) | (boot['ci_high'] < 0)
+display(boot.style.format({'gain': '{:+.1%}', 'ci_low': '{:+.1%}', 'ci_high': '{:+.1%}'}))
+for r in boot.itertuples():
+    print(f'BOOT | {r.city} | {r.set} | {r.model} vs {r.vs} | gain {r.gain:+.1%} [{r.ci_low:+.1%}, {r.ci_high:+.1%}]')
+
+print('\\nSensitivity to the block length (Test, best model vs Naive blend):')
+for city, f in forecasters.items():
+    cis = {L: block_bootstrap_gain(f.test_predictions, best_model[city], 'Naive blend (baseline)', block_days=L)
+           for L in (1, 3, 7)}
+    print(f'{city}: ' + ' | '.join(f"{L}-day blocks ({c['blocks']}): [{c['ci_low']:+.1%}, {c['ci_high']:+.1%}]"
+                                   for L, c in cis.items()))
+""")
+
+md("""
+**Figure 7 – Gain of the best model of each city over every competitor**, with 95% block-bootstrap confidence intervals,
+on Validation (hollow) and Test (filled). A bar that crosses the dashed zero line means the difference could be luck.
+""")
+
+code("""
+# Forest plot of the bootstrap confidence intervals
+SET_STYLE = {'Validation': {'color': '#eb6834', 'mfc': 'white', 'offset': -0.17},   # y axis is inverted: Validation on top
+             'Test': {'color': '#2a78d6', 'mfc': '#2a78d6', 'offset': 0.17}}
+fig, axes = plt.subplots(1, 2, figsize=(15, 4.8), sharex=True)
+for ax, city in zip(axes, CITY_FILES):
+    labels = competitors(city)
+    for set_name, st in SET_STYLE.items():
+        sub = boot[(boot.city == city) & (boot.set == set_name)].set_index('vs').loc[labels]
+        y = np.arange(len(labels)) + st['offset']
+        ax.hlines(y, sub['ci_low'] * 100, sub['ci_high'] * 100, color=st['color'], lw=2)
+        ax.plot(sub['gain'] * 100, y, 'o', ms=8, color=st['color'], mfc=st['mfc'], mew=2, label=set_name)
+        if set_name == 'Test':
+            for yi, g in zip(y, sub['gain']):
+                ax.annotate(f'{g:+.1%}', (g * 100, yi), xytext=(0, -13), textcoords='offset points',
+                            ha='center', fontsize=9, color='#333333')
+    ax.axvline(0, color='#555555', ls='--', lw=1)
+    ax.set_yticks(range(len(labels)), [f'vs {l}' for l in labels])
+    ax.invert_yaxis()
+    ax.set(title=f'{city} – {best_model[city]}', xlabel='MAE reduction (%), 95% block-bootstrap CI')
+    ax.grid(axis='y', visible=False)
+axes[0].legend(loc='lower right')
+plt.tight_layout()
+plt.show()
+""")
+
+md(note("BOOTSTRAP"))
+
+md("""
+### 4.4. Forecast vs. actual
+**Figure 8 – First 14 days of the Test set:** actual values, the Naive blend baseline and the best model of each city (chosen on Validation)
 (the time axis is the **forecast** time, i.e. $t + 24h$).
 """)
 
@@ -75,7 +170,7 @@ plt.show()
 md(note("FORECAST"))
 
 md("""
-### 4.4. Error analysis
+### 4.5. Error analysis
 A regression problem has no direct confusion matrix, so we (1) analyze the error by **hour of day** and **month**, and
 (2) convert PM2.5 into **air quality levels** (US EPA 2024 breakpoints) to build a **level confusion matrix** —
 showing which level the model tends to confuse with which.
@@ -134,7 +229,7 @@ plt.show()
 md("*USG = Unhealthy for Sensitive Groups (35.5–55.4 µg/m³).*\n\n" + note("ERROR"))
 
 md("""
-### 4.5. Feature importance (permutation importance)
+### 4.6. Feature importance (permutation importance)
 Measures how much the Test MAE increases when each original feature of the best model is randomly shuffled.
 *Caveat:* the PM2.5 lag/rolling features are strongly correlated, so shuffling one of them hurts less than its real
 contribution (the others carry the same information) — the importance of the "PM2.5 history" group is spread over several features.
@@ -189,7 +284,7 @@ display(group_imp.round(2))
 md(note("IMPORTANCE"))
 
 md("""
-### 4.6. Inference demo: `predict_next`
+### 4.7. Inference demo: `predict_next`
 Takes the hourly observation history up to time $t$ and returns the PM2.5 forecast at $t + 24h$ together with its air quality level.
 Demo: we use a history ending 24 hours before the last available observation, then compare with the known actual value.
 """)
@@ -216,4 +311,4 @@ for city, df in clean.items():
 display(pd.DataFrame(demo_rows))
 """)
 
-md("### 4.7. Conclusions, limitations and future work\n\n" + note("CONCLUSION"))
+md("### 4.8. Conclusions, limitations and future work\n\n" + note("CONCLUSION"))
