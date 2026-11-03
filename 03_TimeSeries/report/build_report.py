@@ -116,9 +116,16 @@ def load_results():
                re.findall(r"(\w+): (\d+) values ≤ 0 or > 1000.*?missing PM2.5: ([\d.]+)% → ([\d.]+)%", all_text)}
     err = {c: (float(lo), int(hlo), float(hi), int(hhi), ast.literal_eval(months)) for c, lo, hlo, hi, hhi, months in
            re.findall(r"(\w+): MAE by hour min ([\d.]+) \(h(\d+)\) – max ([\d.]+) \(h(\d+)\).*?by month: (\{.*\})", all_text)}
+    split = {c: tuple(int(x.replace(",", "")) for x in (a, b_, c_)) + (float(m1), float(m2), float(m3))
+             for c, a, b_, c_, m1, m2, m3 in re.findall(
+                 r"(\w+) split: Train ([\d,]+) \| Validation ([\d,]+) \| Test ([\d,]+) samples \| "
+                 r"mean target: Train ([\d.]+), Validation ([\d.]+), Test ([\d.]+)", all_text)}
+    window = {c: (int(n), float(mb), m, float(mm), float(sf), float(sa)) for c, n, mb, m, mm, sf, sa in re.findall(
+        r"(\w+) – first 14 days of Test \((\d+) hours\): MAE Naive blend ([\d.]+) vs (\w+) ([\d.]+) \| "
+        r"std of forecast ([\d.]+) vs actual ([\d.]+)", all_text)}
     samples = {c: int(n.replace(",", "")) for c, n in re.findall(r"(\w+): ([\d,]+) samples \| 23 features", all_text)}
     return {"test": test, "val": val, "aqi": aqi, "periods": periods, "top": top, "sklearn": versions, "best": best,
-            "groups": groups, "blend_w": blend_w, "outliers": outliers, "missing": missing, "samples": samples, "err": err}
+            "groups": groups, "blend_w": blend_w, "outliers": outliers, "missing": missing, "samples": samples, "err": err, "split": split, "window": window}
 
 
 # ---------------------------------------------------------------- HTML building blocks
@@ -181,6 +188,11 @@ def build_body(r, for_pdf):
     top_txt = {c: ", ".join(f"<code>{esc(k)}</code> ({v:.2f})" for k, v in top[c].items()) for c in CITIES}
     grp_txt = {c: ", ".join(f"{esc(k)} +{v:.2f}" for k, v in groups[c].items()) for c in CITIES}
     hc_months = list(err["HCMC"][4].items())
+    sp, win = r["split"], r["window"]
+    split_txt = "; ".join(f"{c}: {sp[c][0]:,} / {sp[c][1]:,} / {sp[c][2]:,} samples, mean target {sp[c][3]:.1f} → {sp[c][4]:.1f} → {sp[c][5]:.1f} µg/m³"
+                          for c in CITIES)
+    win_txt = "; ".join(f"{c}: {win[c][2]} {win[c][3]:.2f} vs Naive blend {win[c][1]:.2f} ({win[c][0]} hours)" for c in CITIES)
+    std_txt = ", ".join(f"{c} {win[c][4]:.1f} vs {win[c][5]:.1f}" for c in CITIES)
 
     return f"""
 <header class="title">
@@ -251,7 +263,7 @@ Calendar features describe the target time <i>t</i> + 24h, which is known in adv
 (the same 24h <code>gap</code> is used between the folds of <code>TimeSeriesSplit</code> during tuning).
 All preprocessing lives in one <code>ColumnTransformer</code> + <code>Pipeline</code> fitted on Train only.</li>
 </ul>
-{figure('split', 3, 'Chronological split per city. The Test periods differ (Hanoi ' + tp['Hanoi'] + ', HCMC ' + tp['HCMC'] + ') because Hanoi has more missing data; Hanoi\'s Test set has almost no afternoon hours.')}
+{figure('split', 3, f"Chronological split per city (Train / Validation / Test — {split_txt}). The later sets fall in the cleaner season, so the models are tested on a distribution they saw less of. The Test periods differ (Hanoi {tp['Hanoi']}, HCMC {tp['HCMC']}) because Hanoi has more missing data; Hanoi's Test set has almost no afternoon hours.")}
 
 <h2>4. Modeling</h2>
 <p>Models: three naive baselines (<b>Persistence</b>, <b>24h mean</b>, <b>Naive blend</b>), <b>Ridge</b>, <b>RandomForest</b> and <b>HistGradientBoosting</b>.
@@ -267,7 +279,7 @@ Selected models: <b>{r['best']['Hanoi']}</b> for Hanoi and <b>{r['best']['HCMC']
 <p>Each model is retrained on Train + Validation and evaluated <b>once</b> on Test. The model chosen on Validation is shown in bold. "Gain" = MAE reduction relative to the reference (+ = better).</p>
 {table(test_tbl, 'metrics')}
 {figure('mae', 4, f"Test MAE per model and city (labels: MAE reduction vs the Naive blend; + = better, − = worse). The model chosen on Validation cuts MAE by {b('Hanoi', 'vs_blend'):.1f}% in Hanoi ({b('Hanoi', 'model')}) and by {b('HCMC', 'vs_blend'):.1f}% in HCMC ({b('HCMC', 'model')}) relative to the blend; in HCMC the tree models gain only {hc_blend.min():.1f}–{hc_blend.max():.1f}%. There is no single best model for both cities.")}
-{figure('forecast', 5, 'First 14 days of the Test set (time axis = forecast time). The models follow the level and daily rhythm better than Persistence, but smooth out short spikes.')}
+{figure('forecast', 5, f"First 14 days of the Test set (time axis = forecast time). MAE in this window — {win_txt}: a clear gain in Hanoi, a tie in HCMC. The forecasts are much smoother than reality (std of forecast vs actual, µg/m³: {std_txt}), so short spikes are missed.")}
 <p><b>Answer to question 1.</b> Against plain Persistence, machine learning looks like a {b('Hanoi', 'reduction'):.0f}% / {b('HCMC', 'reduction'):.0f}% gain,
 but part of that comes from simply smoothing the current value. Against the best naive forecast the gain is about <b>{b('Hanoi', 'vs_blend'):.0f}% in Hanoi</b>
 and only <b>{b('HCMC', 'vs_blend'):.0f}% in HCMC</b>, where only the linear Ridge model adds a consistent improvement.

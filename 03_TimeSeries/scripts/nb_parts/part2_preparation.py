@@ -239,9 +239,13 @@ for ax, (city, (tr, va, te)) in zip(axes, splits.items()):
                 label=f'{name}: {len(part):,} samples ({part.index.min():%d/%m/%Y} – {part.index.max():%d/%m/%Y})')
     ax.set(title=city, ylabel='PM2.5 (µg/m³)')
     ax.legend(loc='upper right', fontsize=9)
+    print(f'{city} split: Train {len(tr):,} | Validation {len(va):,} | Test {len(te):,} samples | '
+          f'mean target: Train {tr[TARGET].mean():.1f}, Validation {va[TARGET].mean():.1f}, Test {te[TARGET].mean():.1f} µg/m³')
 plt.tight_layout()
 plt.show()
 """)
+
+md(note("SPLIT"))
 
 md("""
 ### 2.6. Preprocessing pipeline (imputation, outlier clipping, encoding, scaling)

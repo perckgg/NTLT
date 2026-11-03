@@ -54,6 +54,21 @@ HCMC is the opposite (8.5 vs 7.0) because dust rises again in September.
 (Tree-model results can shift by a few hundredths of µg/m³ between scikit-learn versions; Ridge and the baselines do not change.)
 """,
 
+"SPLIT": """
+**Figure caption (split):** Train / Validation / Test have 6,884 / 1,462 / 1,481 samples in Hanoi and 10,177 / 2,161 / 2,185 in HCMC.
+The mean target drops from Train to Test (Hanoi 33.5 → 30.1 → 25.5 µg/m³, HCMC 34.5 → 26.9 → 25.9 µg/m³): the later sets fall in the
+cleaner season, so the models are evaluated on a distribution they saw less of. Because Hanoi has more missing data, its Validation and Test
+periods start earlier (Test 26/02/2026, vs 30/06/2026 for HCMC) — another reason to compare relative gains, not absolute MAE, between cities.
+""",
+
+"FORECAST": """
+**Figure 7 caption:** In Hanoi the best model clearly tracks the actual series better than the Naive blend in this window
+(MAE 10.08 vs 12.98 µg/m³ over 203 hours with data). In HCMC the two are practically tied (Ridge 6.96 vs blend 6.81 over 335 hours) —
+consistent with the small overall gain in HCMC (Section 4.2). In both cities the forecast is much smoother than reality:
+its standard deviation is about half of the actual one (Hanoi 8.8 vs 16.3, HCMC 5.3 vs 9.5 µg/m³), so short spikes are missed.
+This is the visual counterpart of the under-forecasting of polluted hours in Section 4.4.
+""",
+
 "ERROR": """
 **Error analysis findings:**
 - **By hour:** Hanoi's error is fairly even across the hours that have data (6.8–9.3 µg/m³; hours 15h, 16h and 19h have fewer than 20 Test samples

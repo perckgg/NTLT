@@ -48,7 +48,7 @@ md(note("CREATIVE"))
 
 md("""
 ### 4.3. Forecast vs. actual
-**Figure 7 – First 14 days of the Test set:** actual values, the baseline and the best model of each city (chosen on Validation)
+**Figure 7 – First 14 days of the Test set:** actual values, the Naive blend baseline and the best model of each city (chosen on Validation)
 (the time axis is the **forecast** time, i.e. $t + 24h$).
 """)
 
@@ -61,11 +61,18 @@ for ax, (city, f) in zip(axes, forecasters.items()):
     ax.plot(target_time, w['actual'], color='k', lw=1.3, label='Actual')
     ax.plot(target_time, w['Naive blend (baseline)'], color='gray', ls=':', label='Naive blend (baseline)')
     ax.plot(target_time, w[best_model[city]], color=CITY_COLORS[city], label=best_model[city])
-    ax.set(title=f'{city} – 24h-ahead forecast', ylabel='PM2.5 (µg/m³)')
+    mae_blend = mean_absolute_error(w['actual'], w['Naive blend (baseline)'])
+    mae_best = mean_absolute_error(w['actual'], w[best_model[city]])
+    print(f'{city} – first 14 days of Test ({len(w)} hours): MAE Naive blend {mae_blend:.2f} vs {best_model[city]} {mae_best:.2f} | '
+          f'std of forecast {w[best_model[city]].std():.1f} vs actual {w["actual"].std():.1f} µg/m³')
+    ax.set(title=f'{city} – 24h-ahead forecast (MAE in this window: Naive blend {mae_blend:.2f}, {best_model[city]} {mae_best:.2f})',
+           ylabel='PM2.5 (µg/m³)')
     ax.legend()
 plt.tight_layout()
 plt.show()
 """)
+
+md(note("FORECAST"))
 
 md("""
 ### 4.4. Error analysis
