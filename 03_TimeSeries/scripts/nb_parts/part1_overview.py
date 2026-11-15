@@ -29,7 +29,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from sklearn.base import BaseEstimator, TransformerMixin, RegressorMixin
+from sklearn.base import BaseEstimator, TransformerMixin, RegressorMixin, clone
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
@@ -61,16 +61,25 @@ The data was **collected through public APIs** with the script `scripts/crawl_ai
 
 | Component | Source | Notes |
 |---|---|---|
-| PM2.5 – Hanoi | [OpenAQ v3](https://openaq.org) – station *46 Luu Quang Vu* (Hanoi Air Quality Monitoring Network, sensor 7772032) | City monitoring station, **has real gaps** |
-| PM2.5 – HCMC | OpenAQ v3 – station *CMT8* (AirGradient, sensor 11357424) | Low-cost sensor |
-| Weather | [Open-Meteo Historical Weather API](https://open-meteo.com) | Temperature, humidity, precipitation, wind, pressure, cloud cover |
+| PM2.5 – Hanoi | [OpenAQ v3](https://openaq.org) – station *Công viên Nhân Chính – Khuất Duy Tiến* (Hanoi Air Quality Monitoring Network, sensor 13502151) | Reference monitor of the city network |
+| PM2.5 – HCMC | OpenAQ v3 – station *CMT8* (AirGradient, sensor 11357424) | Low-cost sensor (the only HCMC station with continuous data in the period) |
+| Weather | [Open-Meteo Historical Weather API](https://open-meteo.com) | Temperature, humidity, precipitation, wind, pressure, cloud cover, at the coordinates of each PM2.5 station |
 
-- **Period:** 01/12/2024 – 30/09/2026 (22 months, 16,056 hours per city), Vietnam local time (UTC+7).
+- **PM2.5 values** are OpenAQ hourly means of the station's sub-hourly readings; each timestamp is the **start** of the hour, Vietnam local time (UTC+7).
+- **Period:** the same calendar period for both cities, from the first full day of the Hanoi station to the last full day before the crawl
+  (exact dates and number of hours are printed in Section 1.2).
 - A complete hourly time grid is built: hours with no measurement become `NaN`.
+
+**How the stations were chosen.** The script `scripts/check_station_coverage.py` lists every OpenAQ PM2.5 sensor within 25 km of
+each city centre that reported during the period and measures, over the period: `coverage` (share of hours with a value),
+`worst_hour_cov` (lowest coverage among the 24 hours of the day), `worst_month_cov` (lowest coverage among calendar months) and
+`longest_gap_h` (longest run of missing hours). `worst_hour_cov` matters as much as `coverage`: if a station misses mostly the
+afternoon hours, the gaps are **not at random** (the missing hours differ systematically from the measured ones) and both the
+daily cycle and the forecast errors would be biased. We use the station with the highest coverage in each city.
 
 | Column | Type | Meaning |
 |---|---|---|
-| `datetime` | datetime | Timestamp (local time) |
+| `datetime` | datetime | Timestamp (local time, start of the hour) |
 | `city` | categorical | City |
 | `temperature_2m` | numerical | Temperature at 2 m (°C) |
 | `relative_humidity_2m` | numerical | Relative humidity (%) |
@@ -81,6 +90,7 @@ The data was **collected through public APIs** with the script `scripts/crawl_ai
 | `cloud_cover` | numerical | Cloud cover (%) |
 | `pm25` | numerical | PM2.5 concentration (µg/m³) — **the variable to forecast** |
 | `pm25_source` | categorical | PM2.5 source (`openaq`, or `open-meteo` if the crawler had to fall back) |
+| `station` | categorical | Name of the PM2.5 station |
 
 ### 1.2. Loading the data
 The CSV files are read locally; on Colab, if they are not found, they are downloaded from GitHub (**set `GITHUB_RAW_BASE`** to the group's repo).
@@ -92,19 +102,26 @@ CITY_FILES = {'Hanoi': 'air_quality_hanoi.csv', 'HCMC': 'air_quality_hcmc.csv'}
 LOCAL_DIRS = ['data/timeseries', '../data/timeseries', '/content/data/timeseries', '/content']
 
 
-def load_city_data(filename):
+def load_csv(filename, parse_dates=('datetime',)):
+    \"\"\"Read a CSV from the first local folder that has it, otherwise from GitHub.\"\"\"
     for d in LOCAL_DIRS:
         path = os.path.join(d, filename)
         if os.path.exists(path):
-            return pd.read_csv(path, parse_dates=['datetime'])
-    return pd.read_csv(f'{GITHUB_RAW_BASE}/{filename}', parse_dates=['datetime'])
+            return pd.read_csv(path, parse_dates=list(parse_dates))
+    return pd.read_csv(f'{GITHUB_RAW_BASE}/{filename}', parse_dates=list(parse_dates))
 
 
-raw = {city: load_city_data(f).set_index('datetime').sort_index().assign(city=city)
+raw = {city: load_csv(f).set_index('datetime').sort_index().assign(city=city)
        for city, f in CITY_FILES.items()}
 for city, df in raw.items():
     print(f'{city}: {df.shape[0]:,} rows × {df.shape[1]} columns | '
-          f'{df.index.min():%Y-%m-%d} → {df.index.max():%Y-%m-%d} | PM2.5 source: {", ".join(df.pm25_source.unique())}')
+          f'{df.index.min():%Y-%m-%d %H:%M} → {df.index.max():%Y-%m-%d %H:%M} '
+          f'({(df.index.max() - df.index.min()).days + 1} days) | station: {", ".join(df.station.unique())} | '
+          f'PM2.5 source: {", ".join(df.pm25_source.unique())}')
+
+coverage = load_csv('station_coverage.csv', parse_dates=('first', 'last'))
+print('\\nCandidate stations over the same period (output of scripts/check_station_coverage.py):')
+display(coverage)
 raw['Hanoi'].head()
 """)
 
@@ -177,9 +194,10 @@ display(monthly)
 
 md("""
 **Figure 4 – Daily cycle:** mean PM2.5 by hour of day, split into the dry/cool half-year (Nov–Apr) and the wet/hot half-year (May–Oct).
-Only **days with at least 18 measured hours** are used. Reason: from November 2025 the Hanoi station rarely reports in the afternoon,
-so a plain mean by hour would average the afternoon hours over *different days* (mostly the cleaner, earlier period) than the night hours,
-and the shape of the curve would reflect *which days have data* instead of the real daily cycle.
+Only **days with at least 18 measured hours** are used, so that every hour of the day is averaged over (almost) the same set of days.
+With a plain mean by hour, an hour that is missing more often than others would be averaged over *different days*, and the shape of
+the curve could reflect *which days have data* instead of the real daily cycle. With the chosen stations the coverage of every hour
+of the day is close to the overall coverage (`worst_hour_cov` in Section 1.2), so this restriction changes little; it is kept as a safeguard.
 """)
 
 code("""

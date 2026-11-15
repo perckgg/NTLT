@@ -220,37 +220,79 @@ datasets['Hanoi'].head()
 """)
 
 md("""
-### 2.5. Chronological Train / Validation / Test split
-A time series **must not be shuffled** (that would leak the future into the past). The split follows **time order**:
-first 70% → Train, next 15% → Validation (model selection), last 15% → Test (final evaluation).
-An extra `HORIZON` = 24 hours is dropped before each boundary so that the **targets** of one set do not fall inside the next set's period.
+### 2.5. Chronological split: Development / Test, and walk-forward folds
+A time series **must not be shuffled** (that would leak the future into the past), so every split follows **time order** and uses
+the **same calendar dates for both cities**, so the two cities are compared over the same weather and season.
+
+- **Test** = samples issued from **01/09/2026** to the end of the data (the last 2.5 months). It is used **once**, at the very end (Section 4).
+- **Development** = all samples issued **before** 01/09/2026 − 24h. The extra `HORIZON` = 24 hours makes sure that the **target**
+  ($t + 24h$) of every Development sample is measured before the first Test forecast is issued.
+
+The data covers only one winter, and a single fixed Validation month (or 15% block) would fall in one season: a model would then be
+chosen on, say, clean summer hours and judged on the polluted season. Model selection therefore uses **walk-forward validation**
+(also called evaluation on a rolling forecasting origin, Tashman 2000; Hyndman & Athanasopoulos, *Forecasting: Principles and Practice*, §5.10):
+for every month $m$ from **10/2025 to 08/2026** (11 folds), with $s_m$ the first hour of month $m$,
+
+$$\\text{Train}_m = \\{t \\in \\text{Dev} : t < s_m - 24h\\}, \\qquad \\text{Val}_m = \\{t \\in \\text{Dev} : s_m \\le t < s_{m+1}\\}.$$
+
+Each model is refitted on $\\text{Train}_m$ (an **expanding** window: everything known before the month) and forecasts every sample
+of $\\text{Val}_m$. The 11 validation months do not overlap, so each Development hour from 10/2025 onwards is forecast **exactly once**,
+by a model that never saw it, and the validation set covers the whole winter 2025–26. The first three months (07–09/2025) are only
+used for training, so the first fold has a minimum amount of history.
 """)
 
 code("""
-def time_split(d, train_frac=0.70, val_frac=0.15, gap_hours=HORIZON):
-    n = len(d)
-    t1, t2 = d.index[int(n * train_frac)], d.index[int(n * (train_frac + val_frac))]
-    gap = pd.Timedelta(hours=gap_hours)
-    train = d[d.index < t1 - gap]
-    val = d[(d.index >= t1) & (d.index < t2 - gap)]
-    test = d[d.index >= t2]
-    return train, val, test
+TEST_START = pd.Timestamp('2026-09-01')
+WALK_FORWARD_MONTHS = pd.period_range('2025-10', '2026-08', freq='M')
 
 
-splits = {city: time_split(d) for city, d in datasets.items()}
+def dev_test_split(d, test_start=TEST_START, gap_hours=HORIZON):
+    \"\"\"Development = samples whose target is measured before test_start; Test = samples issued from test_start.\"\"\"
+    dev = d[d.index < test_start - pd.Timedelta(hours=gap_hours)]
+    test = d[d.index >= test_start]
+    return dev, test
+
+
+def walk_forward_folds(dev, months=WALK_FORWARD_MONTHS, gap_hours=HORIZON):
+    \"\"\"For each month m: (m, train = samples whose target is known before m starts, val = samples issued in m).\"\"\"
+    folds = []
+    for m in months:
+        start, end = m.start_time, (m + 1).start_time
+        train = dev[dev.index < start - pd.Timedelta(hours=gap_hours)]
+        val = dev[(dev.index >= start) & (dev.index < end)]
+        folds.append((m, train, val))
+    return folds
+
+
+splits = {city: dev_test_split(d) for city, d in datasets.items()}
 
 fig, axes = plt.subplots(2, 1, figsize=(14, 6), sharex=True)
-for ax, (city, (tr, va, te)) in zip(axes, splits.items()):
-    for part, name, color in [(tr, 'Train', 'tab:blue'), (va, 'Validation', 'tab:orange'), (te, 'Test', 'tab:green')]:
+for ax, (city, (dev, te)) in zip(axes, splits.items()):
+    pre_wf = dev[dev.index < WALK_FORWARD_MONTHS[0].start_time]
+    wf = dev[dev.index >= WALK_FORWARD_MONTHS[0].start_time]
+    for part, name, color in [(pre_wf, 'Development – training only', 'tab:blue'),
+                              (wf, 'Development – walk-forward validation months', 'tab:orange'),
+                              (te, 'Test', 'tab:green')]:
         daily = part[TARGET].resample('D').mean()
         ax.plot(daily.index, daily, color=color, lw=0.8,
                 label=f'{name}: {len(part):,} samples ({part.index.min():%d/%m/%Y} – {part.index.max():%d/%m/%Y})')
-    ax.set(title=city, ylabel='PM2.5 (µg/m³)')
-    ax.legend(loc='upper right', fontsize=9)
-    print(f'{city} split: Train {len(tr):,} | Validation {len(va):,} | Test {len(te):,} samples | '
-          f'mean target: Train {tr[TARGET].mean():.1f}, Validation {va[TARGET].mean():.1f}, Test {te[TARGET].mean():.1f} µg/m³')
+    for m in WALK_FORWARD_MONTHS:
+        ax.axvline(m.start_time, color='gray', lw=0.5, ls=':')
+    ax.set(title=f'{city} (dotted lines: start of each walk-forward fold)', ylabel='Daily mean target PM2.5 (µg/m³)')
+    ax.legend(loc='upper left', fontsize=9)
+    print(f'{city} split: Development {len(dev):,} ({dev.index.min():%Y-%m-%d} → {dev.index.max():%Y-%m-%d %H:%M}) | '
+          f'Test {len(te):,} ({te.index.min():%Y-%m-%d} → {te.index.max():%Y-%m-%d %H:%M}) samples | '
+          f'mean target: Development {dev[TARGET].mean():.1f}, Test {te[TARGET].mean():.1f} µg/m³')
 plt.tight_layout()
 plt.show()
+
+rows = []
+for city, (dev, te) in splits.items():
+    for m, tr, va in walk_forward_folds(dev):
+        rows.append({'city': city, 'month': str(m), 'train': len(tr), 'validation': len(va)})
+fold_sizes = pd.DataFrame(rows).pivot(index='month', columns='city', values=['train', 'validation'])
+print('Walk-forward folds: number of samples in the training window and in the validation month')
+display(fold_sizes)
 """)
 
 md(note("SPLIT"))
@@ -265,7 +307,8 @@ md("""
 | Categorical | `SimpleImputer(most_frequent)` → `OneHotEncoder` |
 
 Everything lives inside a `ColumnTransformer` + `Pipeline`, so all parameters (medians, IQR bounds, mean/std, categories)
-are **learned on the training set only** → no data leakage.
+are **learned on the data the pipeline is fitted on** (the training window of each fold, or the whole Development set
+for the final model), never on the data it is evaluated on → no data leakage.
 """)
 
 code("""
@@ -300,7 +343,7 @@ def build_preprocessor():
     ], sparse_threshold=0)
 
 
-tr = splits['Hanoi'][0]
+tr = splits['Hanoi'][0]   # Development set of Hanoi
 pre = build_preprocessor().fit(tr[FEATURES])
 Xt = pd.DataFrame(pre.transform(tr[FEATURES]), columns=pre.get_feature_names_out(), index=tr.index)
 print(f'After preprocessing: {Xt.shape[1]} columns (from {len(FEATURES)} original columns, one-hot expands the categoricals)')
@@ -308,7 +351,7 @@ print('Missing values left after the pipeline:', int(Xt.isna().sum().sum()))
 
 fig, axes = plt.subplots(1, 2, figsize=(14, 4))
 sns.histplot(tr['pm25_lag_0'], bins=80, ax=axes[0], color='gray')
-axes[0].set(title='pm25_lag_0 – before preprocessing (Hanoi, train)', xlabel='µg/m³')
+axes[0].set(title='pm25_lag_0 – before preprocessing (Hanoi, Development)', xlabel='µg/m³')
 sns.histplot(Xt['pm__pm25_lag_0'], bins=80, ax=axes[1], color='teal')
 axes[1].set(title='After IQRClipper + StandardScaler', xlabel='z-score')
 plt.tight_layout()
