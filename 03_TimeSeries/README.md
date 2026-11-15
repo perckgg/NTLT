@@ -84,6 +84,7 @@ If no OpenAQ key is available, it falls back to the Open-Meteo Air Quality API (
 ├── README.md
 ├── index.html                           # GitHub Pages sub-page for this part (generated)
 ├── VIDEO_SCRIPT.md                      # outline for the 5–10 minute presentation video
+├── GIAI_THICH.md                        # Vietnamese walkthrough of every step, formula and decision (for the defence)
 ├── data/timeseries/
 │   ├── air_quality_hanoi.csv            # hourly PM2.5 + weather, Hanoi
 │   └── air_quality_hcmc.csv             # hourly PM2.5 + weather, HCMC
