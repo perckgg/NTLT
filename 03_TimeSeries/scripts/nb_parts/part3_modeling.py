@@ -195,6 +195,8 @@ for city, f in forecasters.items():
 md("""
 **Figure – Walk-forward MAE by month** for every model. Each point is the MAE of the forecasts issued in that month by a model trained
 only on data known before the month started. The bars show the mean measured PM2.5 (target) of the month, for context.
+The bias tables below give the **bias** of the best model and of the Naive blend in each month, $\\frac{1}{|\\text{Val}_m|}\\sum_{i \\in \\text{Val}_m} (\\hat y_i - y_i)$:
+a negative bias means the forecasts are too low on average.
 """)
 
 code("""
@@ -223,6 +225,15 @@ plt.show()
 for city in CITY_FILES:
     print(f'{city} – walk-forward MAE by month (µg/m³):')
     display(monthly_mae[city].T.reindex(list(make_models())).round(2))
+
+# Bias = mean(forecast − actual) per month: negative = the model forecasts too low on average
+for city, f in forecasters.items():
+    p = f.wf_predictions
+    cols = [best_model[city], 'Naive blend (baseline)']
+    bias = p[cols].sub(p['actual'], axis=0).groupby(p['fold']).mean()
+    bias['mean measured PM2.5'] = p.groupby('fold')['actual'].mean()
+    print(f'{city} – walk-forward bias by month (mean of forecast − actual, µg/m³):')
+    display(bias.T.round(1))
 """)
 
 md(note("VAL"))

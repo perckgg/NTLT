@@ -253,6 +253,7 @@ for ax, (city, f) in zip(axes, forecasters.items()):
     ax.set_title(f'{city} – {best_model[city]} (Test) | correct EPA band: {acc:.1%}')
     print(f'{city} Test: correct EPA band {acc:.1%} | within ±1 band: '
           f'{(abs(actual_lvl.cat.codes - pred_lvl.cat.codes) <= 1).mean():.1%}')
+    print('Measured hours per band:', cm.sum(axis=1).to_dict())
     print(cm, end='\\n\\n')
 plt.tight_layout()
 plt.show()
