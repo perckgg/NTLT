@@ -34,17 +34,17 @@ nav.top{font-size:.9rem;margin-bottom:12px}
 </head>
 <body>
 <main>
-<nav class="top"><a href="../">← Group landing page</a> · <a href="https://github.com/perckgg/NTLT">Repository</a></nav>
+<nav class="top"><a href="https://perckgg.github.io/IndexError-DataViz/">← Group landing page</a> · <a href="https://github.com/perckgg/NTLT">Repository</a></nav>
 
 <header class="title">
   <p class="kicker">Programming Foundations for Data Analysis and Visualization · Semester 261 (2026–2027)</p>
   <h1>Part 3 — Time Series: 24-Hour-Ahead PM2.5 Forecasting, Hanoi vs Ho Chi Minh City</h1>
   <p class="meta">Ho Chi Minh City University of Technology (HCMUT) – VNU-HCM · Faculty of Computer Science and Engineering ·
   Instructor: Lê Thành Sách</p>
-  <p class="meta"><b>Data type:</b> Time series · <b>Group:</b> [Group name]</p>
+  <p class="meta"><b>Data type:</b> Time series · <b>Group:</b> IndexError</p>
 </header>
 
-<table class="members"><thead><tr><th>Member</th><th>Student ID</th><th>Contribution</th></tr></thead><tbody><tr><td>[Full name]</td><td>[Student ID]</td><td>Data collection, notebook, report</td></tr></tbody></table>
+<table class="members"><thead><tr><th>Member</th><th>Student ID</th><th>Contribution</th></tr></thead><tbody><tr><td>Nguyễn Văn Hoàng Khang</td><td>2570754</td><td>Time series: data collection, notebook, report</td></tr></tbody></table>
 
 <ul class="links">
   <li><a href="https://github.com/perckgg/NTLT/blob/main/03_TimeSeries/notebooks/03_TimeSeries_Air_Quality.ipynb">Notebook on GitHub</a> · <a href="https://colab.research.google.com/github/perckgg/NTLT/blob/main/03_TimeSeries/notebooks/03_TimeSeries_Air_Quality.ipynb">Open in Google Colab</a> (Run all)</li>
@@ -58,8 +58,8 @@ nav.top{font-size:.9rem;margin-bottom:12px}
   On an untouched, chronologically last Test set, the best model (chosen on Validation) lowers the MAE of the strongest naive forecast
   (a blend of the current value and its 24h mean) by <b>12.5% in Hanoi</b> (RandomForest, 9.23 → 8.08 µg/m³)
   and by <b>5.6% in HCMC</b> (Ridge, 9.05 → 8.54 µg/m³)
-  — 16.4% / 10.9% against plain Persistence — and predicts the correct US EPA air quality level in
-  80.8% / 76.4% of hours. The best model type differs by city, and both models under-forecast polluted hours.</p>
+  — 16.4% / 10.9% against plain Persistence — and puts the forecast in the correct US EPA PM2.5 concentration band in
+  80.7% / 76.3% of hours. The best model type differs by city, and both models under-forecast polluted hours.</p>
 </div>
 
 <h2>1. Problem and questions</h2>
@@ -85,12 +85,14 @@ A model is only useful if it beats the strongest of them — the Naive blend.</p
 <p>Period 01/12/2024 – 30/09/2026: <b>16,056 hourly rows × 11 columns per city</b> on a complete hourly grid (Vietnam time), where hours without a
 measurement are <code>NaN</code>. The crawler (<code>scripts/crawl_air_quality.py</code>) is reproducible and falls back to Open-Meteo Air Quality (CAMS) if
 no OpenAQ key is available.</p>
-<p><b>Key EDA findings.</b> Mean PM2.5 is similar (31.7 vs 32.1 µg/m³) and exceeds the WHO 24h guideline (15 µg/m³) in 56% (Hanoi) and 82% (HCMC) of hours,
-but the shapes differ: Hanoi is more volatile (std 20.6 vs 16.3) with a strong winter peak (January 55 vs August 19 µg/m³), and correlates with
-temperature (−0.31) and pressure (+0.31); HCMC has a narrower seasonal range, a 7h rush-hour peak and its strongest link to wind speed (−0.36).
+<p><b>Key EDA findings.</b> Mean hourly PM2.5 is similar (31.7 vs 32.1 µg/m³). The WHO guideline (15 µg/m³) applies to the 24-hour mean, so it is
+compared with daily means of days with at least 18 measured hours: it is exceeded on 91.3% of valid days in Hanoi and 98.2% in HCMC.
+The shapes differ: Hanoi is more volatile (std 20.6 vs 16.3) with a strong winter peak (monthly mean January 55.0 vs August 19.4 µg/m³) and is
+associated with rain (Spearman −0.29), cloud cover (−0.28), temperature (−0.26) and pressure (+0.28); HCMC has a narrower seasonal range,
+a 7h rush-hour peak and its strongest link to wind speed (−0.38).
 The autocorrelation drops from 0.92 / 0.88 at lag 1h to 0.56 / 0.45 at lag 24h, so a day-ahead forecast is much harder than a next-hour one.</p>
 <figure><img src="report/figures/daily.png" alt="Figure 1"><figcaption><b>Figure 1.</b> Daily mean PM2.5 against the WHO 24h guideline. Hanoi has a pronounced winter peak and patchy data from November 2025 onwards; HCMC is more stable.</figcaption></figure>
-<figure><img src="report/figures/cycle.png" alt="Figure 2"><figcaption><b>Figure 2.</b> Mean PM2.5 by hour of day, dry/cool vs wet/hot half-year. HCMC peaks at 7h (traffic), Hanoi in the evening (≈34 µg/m³ at 22h, night-time inversion).</figcaption></figure>
+<figure><img src="report/figures/cycle.png" alt="Figure 2"><figcaption><b>Figure 2.</b> Mean PM2.5 by hour of day, dry/cool vs wet/hot half-year, using only days with at least 18 measured hours (otherwise the missing Hanoi afternoons after 11/2025 distort the curve). HCMC peaks at the 7h rush hour (45.7 µg/m³ in Nov–Apr); Hanoi in Nov–Apr peaks around midnight (43.4 µg/m³ at 0h) and is lowest at 17h (38.7), consistent with a shallow night-time boundary layer.</figcaption></figure>
 
 <h2>3. Data preparation</h2>
 <ul>
@@ -127,8 +129,10 @@ Selected models: <b>RandomForest</b> for Hanoi and <b>Ridge</b> for HCMC.</p>
 <figure><img src="report/figures/mae.png" alt="Figure 4"><figcaption><b>Figure 4.</b> Test MAE per model and city (labels: MAE reduction vs the Naive blend; + = better, − = worse). The model chosen on Validation cuts MAE by 12.5% in Hanoi (RandomForest) and by 5.6% in HCMC (Ridge) relative to the blend; in HCMC the tree models gain only 3.1–3.6%. There is no single best model for both cities.</figcaption></figure>
 <figure><img src="report/figures/forecast.png" alt="Figure 6"><figcaption><b>Figure 6.</b> First 14 days of the Test set (time axis = forecast time). MAE in this window — Hanoi: RandomForest 10.08 vs Naive blend 12.98 (203 hours); HCMC: Ridge 6.96 vs Naive blend 6.81 (335 hours): a clear gain in Hanoi, a tie in HCMC. The forecasts are much smoother than reality (std of forecast vs actual, µg/m³: Hanoi 8.8 vs 16.3, HCMC 5.3 vs 9.5), so short spikes are missed.</figcaption></figure>
 <p><b>Are the differences real?</b> Forecast errors are strongly autocorrelated, so an ordinary bootstrap over hours would be far too optimistic.
-We use a <b>paired block bootstrap</b>: Test (or Validation) hours are grouped into 3-day calendar blocks, whole blocks are resampled 2,000 times,
-and the MAE gain of the best model over each competitor is recomputed on the same hours. Bold = the 95% interval excludes 0.</p>
+We use a <b>paired non-overlapping block bootstrap</b> (Carlstein, 1986): Test (or Validation) hours are grouped into 3-day calendar blocks, whole blocks are
+resampled with replacement 2,000 times, and the MAE gain 1 − MAE<sub>A</sub>/MAE<sub>B</sub> of the best model over each competitor is recomputed on the same hours;
+the 2.5th–97.5th percentiles give a 95% percentile interval. Bold = the interval excludes 0. With 13–31 blocks the intervals are approximate, and the
+16 intervals are descriptive (no multiple-comparison correction): the conclusions rest on the two comparisons fixed in advance, best model vs Naive blend on Test.</p>
 <table class=""><thead><tr><th>City</th><th>Comparison</th><th>Validation gain [95% CI]</th><th>Test gain [95% CI]</th></tr></thead><tbody><tr><td>Hanoi</td><td>RandomForest vs Persistence (baseline)</td><td>+10.9% [-5.4, +23.2]</td><td><b>+16.4% [+8.3, +23.0]</b></td></tr><tr><td>Hanoi</td><td>RandomForest vs Naive blend (baseline)</td><td>+7.8% [-9.2, +20.4]</td><td><b>+12.5% [+3.2, +20.0]</b></td></tr><tr><td>Hanoi</td><td>RandomForest vs Ridge</td><td>+0.8% [-9.0, +8.9]</td><td>+3.1% [-0.3, +6.3]</td></tr><tr><td>HCMC</td><td>Ridge vs Persistence (baseline)</td><td>+8.2% [-0.8, +15.4]</td><td><b>+10.9% [+4.4, +16.7]</b></td></tr><tr><td>HCMC</td><td>Ridge vs Naive blend (baseline)</td><td>+0.5% [-8.8, +9.0]</td><td>+5.6% [-1.3, +11.8]</td></tr><tr><td>HCMC</td><td>Ridge vs RandomForest</td><td><b>+6.3% [+2.6, +10.1]</b></td><td>+2.6% [-1.9, +6.8]</td></tr></tbody></table>
 <figure><img src="report/figures/boot.png" alt="Figure 5"><figcaption><b>Figure 5.</b> MAE gain of the best model of each city over every competitor, with 95% block-bootstrap intervals (hollow = Validation, filled = Test). Against the naive baselines, only the Test gains in Hanoi (both) and over Persistence in HCMC clear zero; the HCMC gain over the Naive blend (+5.6%) does not, for any block length (Test vs Naive blend by block length — Hanoi: 1-day [+5.0, +18.9]%, 3-day [+3.2, +20.0]%, 7-day [+3.5, +19.8]%; HCMC: 1-day [-0.6, +11.6]%, 3-day [-1.3, +11.8]%, 7-day [-2.4, +14.0]%). Ridge's lead over the tree models in HCMC is significant on Validation; the ML models of Hanoi cannot be separated.</figcaption></figure>
 <p><b>Answer to question 1.</b> Against plain Persistence, machine learning looks like a 16% / 11% gain,
@@ -139,8 +143,10 @@ cannot separate the ML models, so the choice of RandomForest there is not establ
 Absolute MAE should not be compared between cities because the Test periods differ; relative improvement over the baseline is the fair comparison.</p>
 
 <h2>6. Error analysis and drivers</h2>
-<p>PM2.5 forecasts are mapped to US EPA 2024 levels (Good ≤ 9, Moderate ≤ 35.4, USG ≤ 55.4, Unhealthy ≤ 125.4 µg/m³) to build a level confusion matrix.</p>
-<figure><img src="report/figures/aqi.png" alt="Figure 7"><figcaption><b>Figure 7.</b> AQI-level confusion matrix of the best model. Correct level: 80.8% (Hanoi) and 76.4% (HCMC); within ±1 level: 98.5% / 98.6%. Most errors are polluted hours forecast as 'Moderate', and 'Good' is never predicted.</figcaption></figure>
+<p>Actual and forecast PM2.5 are put into concentration bands defined by the US EPA 2024 PM2.5 breakpoints (Good ≤ 9.0, Moderate ≤ 35.4, USG ≤ 55.4,
+Unhealthy ≤ 125.4 µg/m³; values truncated to 0.1 first) to build a band confusion matrix. The official AQI uses a 24-hour average, so these hourly
+bands are <b>not</b> official AQI values.</p>
+<figure><img src="report/figures/aqi.png" alt="Figure 7"><figcaption><b>Figure 7.</b> EPA-band confusion matrix of the best model. Correct band: 80.7% (Hanoi) and 76.3% (HCMC); within ±1 band: 98.4% / 98.6%. Most errors are polluted hours forecast as 'Moderate', and 'Good' is never predicted.</figcaption></figure>
 <p>The main weakness is <b>under-forecasting polluted hours</b>: forecasts are pulled towards the mean, so the model follows the trend but is not yet a
 reliable early-warning tool. The error also grows at the end of the Test period (HCMC: 7.1 µg/m³ in 2026-07 → 10.9 in 2026-09)
 when pollution rises again, and HCMC's error peaks in the daytime (9.8 µg/m³ at 14h).</p>
@@ -154,7 +160,7 @@ smaller relative gain over the naive forecast.</p>
 <ul>
 <li><b>Conclusion:</b> one reusable pipeline, trained independently per city, lowers the Test MAE of the strongest naive forecast
 by <b>+12.5% [+3.2, +20.0]</b> in Hanoi and by +5.6% [-1.3, +11.8] in HCMC (gain [95% block-bootstrap CI]; the HCMC gain is not significant;
-vs Persistence: 16.4% / 10.9%, both significant), and gets the AQI level right in
+vs Persistence: 16.4% / 10.9%, both significant), and gets the EPA concentration band right in
 76–81% of hours.</li>
 <li><b>Limitations:</b> one station per city (HCMC is a low-cost sensor); Hanoi has 31–97% missing hours per month from November 2025, so its Validation/Test sets are small,
 lack afternoon hours and contain only the end of winter; only 22 months of data (fewer than two seasonal cycles); the Validation sets are too small to

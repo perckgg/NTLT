@@ -22,9 +22,9 @@ from io import StringIO
 import pandas as pd
 
 # ---------------------------------------------------------------- group info (fill in before submitting)
-GROUP_NAME = "[Group name]"          # must match the GroupRegistration sheet
+GROUP_NAME = "IndexError"            # must match the GroupRegistration sheet
 MEMBERS = [                          # (full name, student ID, role in this part)
-    ("[Full name]", "[Student ID]", "Data collection, notebook, report"),
+    ("Nguyễn Văn Hoàng Khang", "2570754", "Time series: data collection, notebook, report"),
 ]
 VIDEO_URL = None                     # YouTube link (Public/Unlisted) once uploaded
 
@@ -44,18 +44,18 @@ LINKS = {
     "executed": f"{REPO_URL}/blob/main/03_TimeSeries/result/03_TimeSeries_Air_Quality_executed.ipynb",
     "data": f"{REPO_URL}/tree/main/03_TimeSeries/data/timeseries",
     "pdf": "report/03_TimeSeries_Report.pdf",
-    "landing": "../",
+    "landing": "https://perckgg.github.io/IndexError-DataViz/",
 }
 
 # Figures to export: name -> first line of the code cell that draws it
 FIGURES = {
     "daily": "fig, ax = plt.subplots(figsize=(14, 5))",
-    "cycle": "plot_df['half_year']",
+    "cycle": "def complete_days_only(",
     "split": "def time_split(",
     "mae": "MODEL_ORDER = list(make_models())",
     "boot": "# Forest plot of the bootstrap confidence intervals",
     "forecast": "fig, axes = plt.subplots(2, 1, figsize=(14, 8))",
-    "aqi": "AQI_BINS = ",
+    "aqi": "EPA_BINS = ",
     "importance": "fig, axes = plt.subplots(1, 2, figsize=(16, 5))\nfor ax, (city, f) in zip(axes, forecasters.items()):\n    model",
 }
 CITIES = ["Hanoi", "HCMC"]
@@ -104,7 +104,7 @@ def load_results():
     val = pd.DataFrame(val_rows)
 
     aqi = {c: (float(a), float(b)) for c, a, b in
-           re.findall(r"(\w+): correct AQI level ([\d.]+)% \| within ±1 level: ([\d.]+)%", all_text)}
+           re.findall(r"(\w+): correct EPA band ([\d.]+)% \| within ±1 band: ([\d.]+)%", all_text)}
     periods = ast.literal_eval(re.search(r"Test: (\{.*\})", all_text).group(1))
     top = {c: ast.literal_eval(d) for c, d in re.findall(r"(\w+) – top 5: (\{.*\})", all_text)}
     versions = re.search(r"scikit-learn ([\d.]+)", all_text).group(1)
@@ -228,7 +228,7 @@ def build_body(r, for_pdf):
   On an untouched, chronologically last Test set, the best model (chosen on Validation) lowers the MAE of the strongest naive forecast
   (a blend of the current value and its 24h mean) by <b>{b('Hanoi', 'vs_blend'):.1f}% in Hanoi</b> ({b('Hanoi', 'model')}, {blend.loc['Hanoi', 'MAE']:.2f} → {b('Hanoi', 'MAE'):.2f} µg/m³)
   and by <b>{b('HCMC', 'vs_blend'):.1f}% in HCMC</b> ({b('HCMC', 'model')}, {blend.loc['HCMC', 'MAE']:.2f} → {b('HCMC', 'MAE'):.2f} µg/m³)
-  — {b('Hanoi', 'reduction'):.1f}% / {b('HCMC', 'reduction'):.1f}% against plain Persistence — and predicts the correct US EPA air quality level in
+  — {b('Hanoi', 'reduction'):.1f}% / {b('HCMC', 'reduction'):.1f}% against plain Persistence — and puts the forecast in the correct US EPA PM2.5 concentration band in
   {aqi['Hanoi'][0]:.1f}% / {aqi['HCMC'][0]:.1f}% of hours. The best model type differs by city, and both models under-forecast polluted hours.</p>
 </div>
 
@@ -255,12 +255,14 @@ A model is only useful if it beats the strongest of them — the Naive blend.</p
 <p>Period 01/12/2024 – 30/09/2026: <b>16,056 hourly rows × 11 columns per city</b> on a complete hourly grid (Vietnam time), where hours without a
 measurement are <code>NaN</code>. The crawler (<code>scripts/crawl_air_quality.py</code>) is reproducible and falls back to Open-Meteo Air Quality (CAMS) if
 no OpenAQ key is available.</p>
-<p><b>Key EDA findings.</b> Mean PM2.5 is similar (31.7 vs 32.1 µg/m³) and exceeds the WHO 24h guideline (15 µg/m³) in 56% (Hanoi) and 82% (HCMC) of hours,
-but the shapes differ: Hanoi is more volatile (std 20.6 vs 16.3) with a strong winter peak (January 55 vs August 19 µg/m³), and correlates with
-temperature (−0.31) and pressure (+0.31); HCMC has a narrower seasonal range, a 7h rush-hour peak and its strongest link to wind speed (−0.36).
+<p><b>Key EDA findings.</b> Mean hourly PM2.5 is similar (31.7 vs 32.1 µg/m³). The WHO guideline (15 µg/m³) applies to the 24-hour mean, so it is
+compared with daily means of days with at least 18 measured hours: it is exceeded on 91.3% of valid days in Hanoi and 98.2% in HCMC.
+The shapes differ: Hanoi is more volatile (std 20.6 vs 16.3) with a strong winter peak (monthly mean January 55.0 vs August 19.4 µg/m³) and is
+associated with rain (Spearman −0.29), cloud cover (−0.28), temperature (−0.26) and pressure (+0.28); HCMC has a narrower seasonal range,
+a 7h rush-hour peak and its strongest link to wind speed (−0.38).
 The autocorrelation drops from 0.92 / 0.88 at lag 1h to 0.56 / 0.45 at lag 24h, so a day-ahead forecast is much harder than a next-hour one.</p>
 {figure('daily', 1, 'Daily mean PM2.5 against the WHO 24h guideline. Hanoi has a pronounced winter peak and patchy data from November 2025 onwards; HCMC is more stable.')}
-{figure('cycle', 2, 'Mean PM2.5 by hour of day, dry/cool vs wet/hot half-year. HCMC peaks at 7h (traffic), Hanoi in the evening (≈34 µg/m³ at 22h, night-time inversion).')}
+{figure('cycle', 2, 'Mean PM2.5 by hour of day, dry/cool vs wet/hot half-year, using only days with at least 18 measured hours (otherwise the missing Hanoi afternoons after 11/2025 distort the curve). HCMC peaks at the 7h rush hour (45.7 µg/m³ in Nov–Apr); Hanoi in Nov–Apr peaks around midnight (43.4 µg/m³ at 0h) and is lowest at 17h (38.7), consistent with a shallow night-time boundary layer.')}
 
 <h2>3. Data preparation</h2>
 <ul>
@@ -297,8 +299,10 @@ Selected models: <b>{r['best']['Hanoi']}</b> for Hanoi and <b>{r['best']['HCMC']
 {figure('mae', 4, f"Test MAE per model and city (labels: MAE reduction vs the Naive blend; + = better, − = worse). The model chosen on Validation cuts MAE by {b('Hanoi', 'vs_blend'):.1f}% in Hanoi ({b('Hanoi', 'model')}) and by {b('HCMC', 'vs_blend'):.1f}% in HCMC ({b('HCMC', 'model')}) relative to the blend; in HCMC the tree models gain only {hc_blend.min():.1f}–{hc_blend.max():.1f}%. There is no single best model for both cities.")}
 {figure('forecast', 6, f"First 14 days of the Test set (time axis = forecast time). MAE in this window — {win_txt}: a clear gain in Hanoi, a tie in HCMC. The forecasts are much smoother than reality (std of forecast vs actual, µg/m³: {std_txt}), so short spikes are missed.")}
 <p><b>Are the differences real?</b> Forecast errors are strongly autocorrelated, so an ordinary bootstrap over hours would be far too optimistic.
-We use a <b>paired block bootstrap</b>: Test (or Validation) hours are grouped into 3-day calendar blocks, whole blocks are resampled 2,000 times,
-and the MAE gain of the best model over each competitor is recomputed on the same hours. Bold = the 95% interval excludes 0.</p>
+We use a <b>paired non-overlapping block bootstrap</b> (Carlstein, 1986): Test (or Validation) hours are grouped into 3-day calendar blocks, whole blocks are
+resampled with replacement 2,000 times, and the MAE gain 1 − MAE<sub>A</sub>/MAE<sub>B</sub> of the best model over each competitor is recomputed on the same hours;
+the 2.5th–97.5th percentiles give a 95% percentile interval. Bold = the interval excludes 0. With 13–31 blocks the intervals are approximate, and the
+16 intervals are descriptive (no multiple-comparison correction): the conclusions rest on the two comparisons fixed in advance, best model vs Naive blend on Test.</p>
 {table(boot_tbl)}
 {figure('boot', 5, f"MAE gain of the best model of each city over every competitor, with 95% block-bootstrap intervals (hollow = Validation, filled = Test). Against the naive baselines, only the Test gains in Hanoi (both) and over Persistence in HCMC clear zero; the HCMC gain over the Naive blend ({bt[('HCMC', 'Test', 'Naive blend (baseline)')][0]:+.1f}%) does not, for any block length (Test vs Naive blend by block length — {sens_txt}). Ridge's lead over the tree models in HCMC is significant on Validation; the ML models of Hanoi cannot be separated.")}
 <p><b>Answer to question 1.</b> Against plain Persistence, machine learning looks like a {b('Hanoi', 'reduction'):.0f}% / {b('HCMC', 'reduction'):.0f}% gain,
@@ -309,8 +313,10 @@ cannot separate the ML models, so the choice of RandomForest there is not establ
 Absolute MAE should not be compared between cities because the Test periods differ; relative improvement over the baseline is the fair comparison.</p>
 
 <h2>6. Error analysis and drivers</h2>
-<p>PM2.5 forecasts are mapped to US EPA 2024 levels (Good ≤ 9, Moderate ≤ 35.4, USG ≤ 55.4, Unhealthy ≤ 125.4 µg/m³) to build a level confusion matrix.</p>
-{figure('aqi', 7, f"AQI-level confusion matrix of the best model. Correct level: {aqi['Hanoi'][0]:.1f}% (Hanoi) and {aqi['HCMC'][0]:.1f}% (HCMC); within ±1 level: {aqi['Hanoi'][1]:.1f}% / {aqi['HCMC'][1]:.1f}%. Most errors are polluted hours forecast as 'Moderate', and 'Good' is never predicted.")}
+<p>Actual and forecast PM2.5 are put into concentration bands defined by the US EPA 2024 PM2.5 breakpoints (Good ≤ 9.0, Moderate ≤ 35.4, USG ≤ 55.4,
+Unhealthy ≤ 125.4 µg/m³; values truncated to 0.1 first) to build a band confusion matrix. The official AQI uses a 24-hour average, so these hourly
+bands are <b>not</b> official AQI values.</p>
+{figure('aqi', 7, f"EPA-band confusion matrix of the best model. Correct band: {aqi['Hanoi'][0]:.1f}% (Hanoi) and {aqi['HCMC'][0]:.1f}% (HCMC); within ±1 band: {aqi['Hanoi'][1]:.1f}% / {aqi['HCMC'][1]:.1f}%. Most errors are polluted hours forecast as 'Moderate', and 'Good' is never predicted.")}
 <p>The main weakness is <b>under-forecasting polluted hours</b>: forecasts are pulled towards the mean, so the model follows the trend but is not yet a
 reliable early-warning tool. The error also grows at the end of the Test period (HCMC: {hc_months[0][1]:.1f} µg/m³ in {hc_months[0][0]} → {hc_months[-1][1]:.1f} in {hc_months[-1][0]})
 when pollution rises again, and HCMC's error peaks in the daytime ({err['HCMC'][2]:.1f} µg/m³ at {err['HCMC'][3]}h).</p>
@@ -324,7 +330,7 @@ smaller relative gain over the naive forecast.</p>
 <ul>
 <li><b>Conclusion:</b> one reusable pipeline, trained independently per city, lowers the Test MAE of the strongest naive forecast
 by {ci('Hanoi', 'Test', 'Naive blend (baseline)')} in Hanoi and by {ci('HCMC', 'Test', 'Naive blend (baseline)')} in HCMC (gain [95% block-bootstrap CI]; the HCMC gain is not significant;
-vs Persistence: {b('Hanoi', 'reduction'):.1f}% / {b('HCMC', 'reduction'):.1f}%, both significant), and gets the AQI level right in
+vs Persistence: {b('Hanoi', 'reduction'):.1f}% / {b('HCMC', 'reduction'):.1f}%, both significant), and gets the EPA concentration band right in
 {min(a[0] for a in aqi.values()):.0f}–{max(a[0] for a in aqi.values()):.0f}% of hours.</li>
 <li><b>Limitations:</b> one station per city (HCMC is a low-cost sensor); Hanoi has 31–97% missing hours per month from November 2025, so its Validation/Test sets are small,
 lack afternoon hours and contain only the end of winter; only 22 months of data (fewer than two seasonal cycles); the Validation sets are too small to

@@ -8,7 +8,7 @@ Course project for **Programming Foundations for Data Analysis and Visualization
 | **Data** | Self-collected via API: hourly PM2.5 (OpenAQ) + weather (Open-Meteo), 01/12/2024 – 30/09/2026, 16,056 hours per city |
 | **Notebook** | [`notebooks/03_TimeSeries_Air_Quality.ipynb`](notebooks/03_TimeSeries_Air_Quality.ipynb) — runs end-to-end on Colab (Run all) |
 | **Executed copy (with outputs)** | [`result/03_TimeSeries_Air_Quality_executed.ipynb`](result/03_TimeSeries_Air_Quality_executed.ipynb) |
-| **Result (Test)** | Best model per city chosen on Validation, scored on measured values only. Hanoi — RandomForest: **8.08 µg/m³, −12.5% vs. the Naive blend baseline** (95% block-bootstrap CI 3.2–20.0%, significant; −16.4% vs. Persistence); HCMC — Ridge: **8.54 µg/m³, −5.6% vs. Naive blend** (CI −1.3% to +11.8%, **not significant**; −10.9% vs. Persistence, significant); correct AQI level 80.8% / 76.4% |
+| **Result (Test)** | Best model per city chosen on Validation, scored on measured values only. Hanoi — RandomForest: **8.08 µg/m³, −12.5% vs. the Naive blend baseline** (95% block-bootstrap CI 3.2–20.0%, significant; −16.4% vs. Persistence); HCMC — Ridge: **8.54 µg/m³, −5.6% vs. Naive blend** (CI −1.3% to +11.8%, **not significant**; −10.9% vs. Persistence, significant); correct EPA concentration band 80.7% / 76.3% |
 | **PDF report** | [`report/03_TimeSeries_Report.pdf`](report/03_TimeSeries_Report.pdf) |
 | **Web page (GitHub Pages)** | [`index.html`](index.html) |
 
@@ -28,7 +28,7 @@ comparing only with Persistence overstates the gain.
 
 | Section | Main content |
 |---|---|
-| **1. Data description & EDA** | Data sources and column table; descriptive statistics, missing rate, % of hours above the WHO 24h guideline (15 µg/m³); daily series, hourly distribution, monthly boxplots, diurnal cycle by half-year, Spearman correlation with weather |
+| **1. Data description & EDA** | Data sources and column table; descriptive statistics, missing rate, % of **days** whose 24-hour mean exceeds the WHO guideline (15 µg/m³; days with ≥ 18 measured hours); daily series, hourly distribution, monthly boxplots, diurnal cycle by half-year (complete days only), autocorrelation table, Spearman correlation with weather |
 | **2. Data preparation** | Missing report (gap lengths); cleaning invalid (≤ 0, > 1000) and "stuck sensor" values; **causal forward-fill (≤ 6h) for features only, targets are always measured values**; IQR outlier detection; feature engineering (lags, rolling stats, weather, cyclic hour, season, wind sector); **chronological 70/15/15 split with a 24h gap**; `ColumnTransformer` pipeline with a custom `IQRClipper` |
 | **3. Modeling** | Three naive baselines (Persistence, 24h mean, Naive blend), Ridge, RandomForest, HistGradientBoosting; `GridSearchCV` with `TimeSeriesSplit(3, gap=24)` (MAE) for all three ML models; comparison on Validation, which also **selects the best model per city** (Test is used only for reporting); a `CityForecaster` class runs the whole flow for one city |
 | **4. Summary** | Retrain on Train + Validation, evaluate **once** on Test; MAE comparison figure; **paired block-bootstrap confidence intervals** (3-day blocks, checked with 1 and 7 days) for every gain, as a forest plot; forecast vs. actual; error analysis by hour, month and **AQI-level confusion matrix**; single and **grouped** permutation importance; inference function `predict_next`; conclusions, limitations, future work |
@@ -37,7 +37,7 @@ comparing only with Persistence overstates the gain.
 
 | Decision | Reason |
 |---|---|
-| Model each city separately | Different seasonality (Hanoi winter peak ~3× August; HCMC narrower range), different daily peaks (Hanoi 22h, HCMC 7h) and different weather drivers |
+| Model each city separately | Different seasonality (Hanoi winter peak ~3× August; HCMC narrower range), different daily cycles (Hanoi dry-season peak around midnight, HCMC 7h rush hour) and different weather drivers |
 | No interpolation: causal forward-fill (≤ 6h) for features, measured values only for targets | Time interpolation fills a gap with the value measured *after* it — unknown at forecast time (it would leak up to 6h of the future into ~22% of Hanoi's Test features) — and interpolated targets are easier to predict, which would flatter the Test score. Long gaps are not filled (Hanoi is 32.8% missing, 31–97% per month from 11/2025) |
 | Keep PM2.5 peaks in the target, clip only the features (`IQRClipper`) | Peaks are real pollution events; removing them would make evaluation look better than it is |
 | Chronological split + 24h gap, `TimeSeriesSplit(gap=24)` for tuning | Shuffling would leak the future into the past; the gap keeps a set's (and a CV fold's) targets out of the next one |
@@ -53,9 +53,10 @@ comparing only with Persistence overstates the gain.
    The Hanoi gain over the Naive blend is significant (+12.5%, CI +3.2% to +20.0%); the HCMC gain over the blend is not (+5.6%, CI −1.3% to +11.8%),
    for 1-, 3- and 7-day blocks alike. Ridge beats the tree models significantly in HCMC (Validation), but the ML models of Hanoi cannot be separated,
    so the model choice there is not established.
-3. **Error analysis translated into AQI levels.** Forecasts are mapped to US EPA PM2.5 levels to build a confusion matrix:
-   80.8% / 76.4% correct level, 98.5% / 98.6% within ±1 level. The main weakness is **under-forecasting polluted hours**
-   (HCMC: 285 of 359 "Unhealthy for Sensitive Groups" hours predicted as "Moderate"; Hanoi: none of 40 "Unhealthy" hours correct), so the model is not yet reliable as an early-warning tool.
+3. **Error analysis translated into EPA concentration bands.** Actual and forecast hourly PM2.5 are put into the US EPA 2024 breakpoint bands
+   (not the official AQI, which uses 24-hour averages) to build a confusion matrix:
+   80.7% / 76.3% correct band, 98.4% / 98.6% within ±1 band. The main weakness is **under-forecasting polluted hours**
+   (HCMC: 286 of 359 "Unhealthy for Sensitive Groups" hours predicted as "Moderate"; Hanoi: none of 40 "Unhealthy" hours correct), so the model is not yet reliable as an early-warning tool.
 4. **Feature importance, single and grouped.** Correlated lag features share their importance, so groups are also shuffled together.
    Recent PM2.5 is the most important group in both cities; HCMC then depends on **temperature, hour of day and wind speed**,
    Hanoi on **weather**, with the calendar adding almost nothing on its (end-of-winter) Test period.
@@ -119,7 +120,7 @@ jupyter nbconvert --to notebook --execute --output-dir result --output 03_TimeSe
 py report\build_report.py                    # rebuild the PDF report and index.html (needs weasyprint)
 ```
 Every number in the PDF report and the web page is read from the executed notebook, so they always match it.
-Fill in `GROUP_NAME`, `MEMBERS` and `VIDEO_URL` at the top of `report/build_report.py` before the final build.
+`GROUP_NAME` and `MEMBERS` are filled in at the top of `report/build_report.py`; set `VIDEO_URL` there once the video is uploaded.
 Required libraries: `numpy`, `pandas`, `matplotlib`, `seaborn`, `scikit-learn` (≥ 1.2). A full run takes about 1–2 minutes.
 Re-crawling may change the numbers slightly (OpenAQ can backfill data); in that case, re-run the notebook and update `notes.py`.
 Tree-model results (RandomForest, HGB) can shift by a few hundredths of µg/m³ between scikit-learn versions; Ridge and the naive baselines do not change.
@@ -136,7 +137,7 @@ The reference run used scikit-learn 1.9.1 (printed in the first code cell).
 
 ## 8. Before submitting
 
-- [ ] Fill in the group name and member in the first notebook cell (`scripts/nb_parts/part1_overview.py`) and in `report/build_report.py`.
+- [x] Group name (IndexError) and member filled in the first notebook cell and in `report/build_report.py`.
 - [x] Set `GITHUB_RAW_BASE` to the group's repo (`perckgg/NTLT`, branch `main`) and push the `data/timeseries/` CSV files.
 - [ ] Merge this work into `main`, then check that *Run all* works from the "Open in Google Colab" link.
 - [x] Executed copy with outputs saved in `result/`.

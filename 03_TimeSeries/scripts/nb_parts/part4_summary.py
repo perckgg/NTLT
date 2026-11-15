@@ -52,17 +52,38 @@ A Test set of 1,500–2,200 hours sounds large, but forecast errors are **strong
 likely to be followed by a similar error at 11h), so the number of *independent* observations is much smaller, and an
 ordinary i.i.d. bootstrap over hours would give intervals that are far too narrow.
 
-We therefore use a **paired block bootstrap** (Künsch, 1989): the Test (or Validation) samples are grouped into consecutive
-**3-day calendar blocks** of forecast time, whole blocks are resampled with replacement (2,000 times), and the MAE gain
-$1 - \\mathrm{MAE}_A / \\mathrm{MAE}_B$ of the best model $A$ over each competitor $B$ is recomputed on the *same* resampled hours for both models.
-The 2.5% and 97.5% percentiles give a 95% confidence interval; if it excludes 0, the difference is unlikely to be luck.
-The block length is a judgment call (the daily mean error difference has a lag-1-day autocorrelation of about 0.1–0.4 and is small after that),
-so we also check 1-day and 7-day blocks.
+**Method (non-overlapping block bootstrap, Carlstein 1986; the block idea for dependent data is also in Künsch 1989).**
+For a comparison of model $A$ (the best model) with model $B$ on one evaluation set:
+1. Split the samples into $k$ consecutive **3-day calendar blocks** of forecast time $t+24h$. Blocks do not overlap; because of
+   missing hours they do not all contain the same number of samples. Let $S_j^A = \\sum_{i \\in j} |y_i - \\hat y_i^A|$ be the sum of
+   absolute errors of $A$ in block $j$ (same for $B$, on the **same** hours — the comparison is *paired*).
+2. Draw $k$ blocks **with replacement**, i.e. counts $(c_1, \\dots, c_k) \\sim \\mathrm{Multinomial}(k; 1/k, \\dots, 1/k)$, and compute
+   $g^* = 1 - \\sum_j c_j S_j^A \\, / \\, \\sum_j c_j S_j^B$ (the hour counts cancel because both models are scored on the same hours).
+3. Repeat 2,000 times; the 2.5th and 97.5th percentiles of $g^*$ form the 95% **percentile** confidence interval of the gain
+   $g = 1 - \\mathrm{MAE}_A / \\mathrm{MAE}_B$.
+
+An interval that excludes 0 corresponds (approximately) to rejecting "no difference" in a two-sided test at the 5% level.
+**Choice of block length:** blocks must be long enough that the error differences of different blocks are close to independent.
+The cell below prints, on the Validation set, the autocorrelation of the *daily mean* error difference between the best model and the
+Naive blend; it is small beyond lag 1 day, so 3-day blocks are a reasonable choice, and 1-day and 7-day blocks are checked as well.
+
+**Limitations of the method, stated explicitly:** (1) with only 13–31 blocks per set the percentile interval is an approximation;
+(2) we report 16 intervals without a multiple-comparison correction, so they are **descriptive** — the conclusions are based on the two
+comparisons fixed in advance (best model vs Naive blend on Test, one per city); (3) blocks assume the error process is roughly
+stationary within the Test period.
 """)
 
 code("""
 BLOCK_DAYS = 3
 N_BOOT = 2000
+
+# Block-length check on Validation: autocorrelation of the daily mean |error| difference (best model − Naive blend)
+for city, f in forecasters.items():
+    p = f.val_predictions
+    diff = (p[best_model[city]] - p['actual']).abs() - (p['Naive blend (baseline)'] - p['actual']).abs()
+    daily_diff = diff.groupby((diff.index + pd.Timedelta(hours=HORIZON)).floor('D')).mean().asfreq('D')
+    print(f'{city} (Validation): autocorrelation of the daily error difference at lag 1/2/3 days = '
+          + ' / '.join(f'{daily_diff.autocorr(k):.2f}' for k in (1, 2, 3)))
 
 
 def block_bootstrap_gain(p, model_a, model_b, block_days=BLOCK_DAYS, n_boot=N_BOOT, seed=RANDOM_STATE):
@@ -172,8 +193,13 @@ md(note("FORECAST"))
 md("""
 ### 4.5. Error analysis
 A regression problem has no direct confusion matrix, so we (1) analyze the error by **hour of day** and **month**, and
-(2) convert PM2.5 into **air quality levels** (US EPA 2024 breakpoints) to build a **level confusion matrix** —
-showing which level the model tends to confuse with which.
+(2) put both the actual and the forecast PM2.5 into **concentration bands** defined by the US EPA 2024 PM2.5 breakpoints
+(Good ≤ 9.0, Moderate 9.1–35.4, USG 35.5–55.4, Unhealthy 55.5–125.4, Very unhealthy and above ≥ 125.5 µg/m³) and build a
+**band confusion matrix** — showing which band the model tends to confuse with which.
+
+*Precision about the definition:* the official EPA AQI is computed from a **24-hour average** (or the NowCast for hourly reporting).
+Here the breakpoints are applied to **hourly** concentrations, so these are "EPA concentration bands", **not** official AQI values.
+As in the EPA rule, a concentration is first truncated to one decimal (e.g. 9.05 → 9.0 → Good) and then binned.
 """)
 
 code("""
@@ -201,25 +227,27 @@ plt.show()
 """)
 
 code("""
-AQI_BINS = [-np.inf, 9.0, 35.4, 55.4, 125.4, np.inf]
-AQI_LABELS = ['Good', 'Moderate', 'USG', 'Unhealthy', 'Very unhealthy+']
+EPA_BINS = [-np.inf, 9.0, 35.4, 55.4, 125.4, np.inf]      # right-closed: (-inf, 9.0], (9.0, 35.4], ...
+EPA_LABELS = ['Good', 'Moderate', 'USG', 'Unhealthy', 'Very unhealthy+']
 
 
-def to_aqi_level(values):
-    return pd.cut(pd.Series(np.asarray(values, dtype=float)), bins=AQI_BINS, labels=AQI_LABELS)
+def to_epa_band(values):
+    \"\"\"Truncate to 0.1 µg/m³ (EPA rule), then map each hourly PM2.5 value to its EPA concentration band.\"\"\"
+    truncated = np.floor(np.asarray(values, dtype=float) * 10) / 10
+    return pd.cut(pd.Series(truncated), bins=EPA_BINS, labels=EPA_LABELS)
 
 
 fig, axes = plt.subplots(1, 2, figsize=(16, 5))
 for ax, (city, f) in zip(axes, forecasters.items()):
     p = f.test_predictions
-    actual_lvl, pred_lvl = to_aqi_level(p['actual']), to_aqi_level(p[best_model[city]])
+    actual_lvl, pred_lvl = to_epa_band(p['actual']), to_epa_band(p[best_model[city]])
     cm = pd.crosstab(actual_lvl, pred_lvl, rownames=['Actual'], colnames=['Predicted'], dropna=False)
-    cm = cm.reindex(index=AQI_LABELS, columns=AQI_LABELS, fill_value=0)
+    cm = cm.reindex(index=EPA_LABELS, columns=EPA_LABELS, fill_value=0)
     cm_norm = cm.div(cm.sum(axis=1).replace(0, np.nan), axis=0).fillna(0)
     sns.heatmap(cm_norm, annot=cm.values, fmt='d', cmap='Blues', cbar=False, ax=ax)
     acc = (actual_lvl == pred_lvl).mean()
-    ax.set_title(f'{city} – {best_model[city]} | correct level: {acc:.1%}')
-    print(f'{city}: correct AQI level {acc:.1%} | within ±1 level: '
+    ax.set_title(f'{city} – {best_model[city]} | correct EPA band: {acc:.1%}')
+    print(f'{city}: correct EPA band {acc:.1%} | within ±1 band: '
           f'{(abs(actual_lvl.cat.codes - pred_lvl.cat.codes) <= 1).mean():.1%}')
     print(cm, end='\\n\\n')
 plt.tight_layout()
@@ -285,7 +313,7 @@ md(note("IMPORTANCE"))
 
 md("""
 ### 4.7. Inference demo: `predict_next`
-Takes the hourly observation history up to time $t$ and returns the PM2.5 forecast at $t + 24h$ together with its air quality level.
+Takes the hourly observation history up to time $t$ and returns the PM2.5 forecast at $t + 24h$ together with its EPA concentration band.
 Demo: we use a history ending 24 hours before the last available observation, then compare with the known actual value.
 """)
 
@@ -297,7 +325,7 @@ def predict_next(city, history):
     value = float(model.predict(x_last[FEATURES])[0])
     return {'city': city, 'model': best_model[city],
             'forecast_time': x_last.index[0] + pd.Timedelta(hours=HORIZON),
-            'pm25_forecast': round(value, 1), 'aqi_level': str(to_aqi_level([value])[0])}
+            'pm25_forecast': round(value, 1), 'epa_band': str(to_epa_band([value])[0])}
 
 
 demo_rows = []
@@ -306,7 +334,7 @@ for city, df in clean.items():
     history = df.loc[t_end - pd.Timedelta(days=7): t_end]
     res = predict_next(city, history)
     actual = df.loc[res['forecast_time'], 'pm25_raw']
-    res.update({'pm25_actual': round(float(actual), 1), 'aqi_actual': str(to_aqi_level([actual])[0])})
+    res.update({'pm25_actual': round(float(actual), 1), 'epa_band_actual': str(to_epa_band([actual])[0])})
     demo_rows.append(res)
 display(pd.DataFrame(demo_rows))
 """)

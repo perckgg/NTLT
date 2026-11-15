@@ -38,6 +38,11 @@ for city, df in raw.items():
 ax.set(title='Share of hours with PM2.5 data, by month', ylabel='% of hours with data', ylim=(0, 105))
 ax.legend()
 plt.show()
+
+missing_by_month = pd.DataFrame({city: df['pm25'].isna().resample('MS').mean() * 100 for city, df in raw.items()})
+missing_by_month.index = missing_by_month.index.strftime('%Y-%m')
+print('% of hours with missing PM2.5, by month:')
+display(missing_by_month.round(0).astype(int).T)
 """)
 
 md("""
@@ -48,7 +53,7 @@ md("""
 - **"Stuck" sensor:** the same value repeated for ≥ 6 consecutive hours (with PM2.5 > 0) indicates a frozen device → set to `NaN`.
 - **No look-ahead when filling.** Time interpolation (`interpolate(method='time')`) fills a gap using the value measured **after**
   the gap, which is not known yet at forecast time $t$. If the features were built from interpolated values, the model would
-  see up to 6 hours of the future (in Hanoi's Test period this would affect ~22% of the samples). We therefore keep two versions:
+  see up to 6 hours of the future (Section 2.4 prints how many samples this would concern). We therefore keep two versions:
   - `pm25_raw` — the measured values only. **The target is always a measured value** (never filled), so the evaluation is done on real data.
   - `pm25` — `pm25_raw` **forward-filled for at most 6 hours** (`ffill(limit=6)`): "the last known value, if it is at most 6h old".
     This is causal (uses only data ≤ $t$) and is used to build the features.
@@ -206,8 +211,11 @@ def make_dataset(df, city, horizon=HORIZON):
 
 datasets = {city: make_dataset(df, city) for city, df in clean.items()}
 for city, d in datasets.items():
+    filled_now = clean[city]['pm25_raw'].reindex(d.index).isna().mean()   # current value comes from the forward-fill
     print(f'{city}: {len(d):,} samples | {len(FEATURES)} features '
-          f'({len(FEATURES) - len(CAT_FEATURES)} numerical + {len(CAT_FEATURES)} categorical)')
+          f'({len(FEATURES) - len(CAT_FEATURES)} numerical + {len(CAT_FEATURES)} categorical) | '
+          f'{filled_now:.1%} of samples have a forward-filled current value '
+          f'(with two-sided interpolation these would have used future measurements)')
 datasets['Hanoi'].head()
 """)
 

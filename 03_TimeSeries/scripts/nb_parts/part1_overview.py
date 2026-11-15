@@ -7,8 +7,8 @@ md("""
 ## PART 3: TIME SERIES DATA
 ### Topic: 24-Hour-Ahead PM2.5 Forecasting — Hanoi vs Ho Chi Minh City
 
-- **Group:** [Group name]
-- **Member in charge:** [Full name – Student ID]
+- **Group:** IndexError
+- **Member in charge:** Nguyễn Văn Hoàng Khang – 2570754
 
 **Problem.** At time $t$, using the PM2.5 history and the current weather, forecast the PM2.5 concentration
 at time $t + 24h$ (the same hour tomorrow). This is a **time series regression** problem.
@@ -108,13 +108,29 @@ for city, df in raw.items():
 raw['Hanoi'].head()
 """)
 
-md("### 1.3. Descriptive statistics")
+md("""
+### 1.3. Descriptive statistics
+The WHO guideline of 15 µg/m³ is defined for the **24-hour mean**, so it is compared with **daily means**, not with single hours.
+A daily mean is computed only for days with at least 18 of 24 hours measured (75% completeness, the usual rule for daily averages);
+other days are left out rather than averaged over a few hours.
+""")
 
 code("""
+MIN_HOURS_PER_DAY = 18   # 75% of 24 hours
+
+
+def daily_means(s, min_hours=MIN_HOURS_PER_DAY):
+    \"\"\"Daily mean of an hourly series; NaN for days with fewer than `min_hours` measured hours.\"\"\"
+    days = s.resample('D')
+    return days.mean().where(days.count() >= min_hours)
+
+
 raw['Hanoi'].info()
 summary = pd.concat({city: df['pm25'].describe() for city, df in raw.items()}, axis=1).T
 summary['missing_rate'] = [df['pm25'].isna().mean() for df in raw.values()]
-summary['share of hours > WHO'] = [(df['pm25'] > WHO_24H).mean() for df in raw.values()]
+daily = {city: daily_means(df['pm25']).dropna() for city, df in raw.items()}
+summary['valid days'] = [len(d) for d in daily.values()]
+summary['share of days > WHO 24h'] = [(d > WHO_24H).mean() for d in daily.values()]
 display(summary.round(3))
 display(pd.concat({city: df.describe().T for city, df in raw.items()}).round(2))
 """)
@@ -127,8 +143,8 @@ md("""
 code("""
 fig, ax = plt.subplots(figsize=(14, 5))
 for city, df in raw.items():
-    daily = df['pm25'].resample('D').mean()
-    ax.plot(daily.index, daily, label=city, color=CITY_COLORS[city], lw=0.9)
+    d = daily_means(df['pm25'])          # NaN (gap in the line) on days with < 18 measured hours
+    ax.plot(d.index, d, label=city, color=CITY_COLORS[city], lw=0.9)
 ax.axhline(WHO_24H, color='k', ls='--', lw=1, label='WHO 24h guideline (15 µg/m³)')
 ax.set(title='Daily mean PM2.5', ylabel='PM2.5 (µg/m³)')
 ax.legend()
@@ -151,23 +167,45 @@ plt.show()
 
 fig, ax = plt.subplots(figsize=(14, 5))
 sns.boxplot(data=plot_df, x='month', y='pm25', hue='city', palette=CITY_COLORS, showfliers=False, ax=ax)
-ax.set(title='PM2.5 by month (outliers hidden for readability)', xlabel='Month', ylabel='PM2.5 (µg/m³)')
+ax.set(title='PM2.5 by month (box = median and quartiles; outliers hidden)', xlabel='Month', ylabel='PM2.5 (µg/m³)')
 plt.show()
+
+monthly = plot_df.groupby(['city', 'month'])['pm25'].agg(['mean', 'median']).round(1).unstack('city')
+print('Hourly PM2.5 by calendar month (mean and median over all years, µg/m³):')
+display(monthly)
 """)
 
 md("""
 **Figure 4 – Daily cycle:** mean PM2.5 by hour of day, split into the dry/cool half-year (Nov–Apr) and the wet/hot half-year (May–Oct).
+Only **days with at least 18 measured hours** are used. Reason: from November 2025 the Hanoi station rarely reports in the afternoon,
+so a plain mean by hour would average the afternoon hours over *different days* (mostly the cleaner, earlier period) than the night hours,
+and the shape of the curve would reflect *which days have data* instead of the real daily cycle.
 """)
 
 code("""
-plot_df['half_year'] = np.where(plot_df['month'].isin([11, 12, 1, 2, 3, 4]), 'Nov–Apr', 'May–Oct')
+def complete_days_only(s, min_hours=MIN_HOURS_PER_DAY):
+    \"\"\"Keep only the hours of days that have at least `min_hours` measured hours.\"\"\"
+    measured_per_day = s.groupby(s.index.floor('D')).transform('count')
+    return s[measured_per_day >= min_hours]
+
+
+cycle_df = pd.concat([complete_days_only(df['pm25']).to_frame().assign(city=city) for city, df in raw.items()])
+cycle_df['hour'] = cycle_df.index.hour
+cycle_df['half_year'] = np.where(cycle_df.index.month.isin([11, 12, 1, 2, 3, 4]), 'Nov–Apr', 'May–Oct')
+
 fig, axes = plt.subplots(1, 2, figsize=(14, 4), sharey=True)
 for ax, city in zip(axes, CITY_FILES):
-    g = plot_df[plot_df.city == city]
+    g = cycle_df[cycle_df.city == city]
     sns.lineplot(data=g, x='hour', y='pm25', hue='half_year', errorbar=None, ax=ax)
     ax.set(title=city, xlabel='Hour of day', ylabel='Mean PM2.5 (µg/m³)', xticks=range(0, 24, 3))
 plt.tight_layout()
 plt.show()
+
+for city in CITY_FILES:
+    for half, g in cycle_df[cycle_df.city == city].groupby('half_year'):
+        by_hour = g.groupby('hour')['pm25'].mean()
+        print(f'{city} {half} ({g.index.floor("D").nunique()} complete days): highest mean at {by_hour.idxmax()}h '
+              f'({by_hour.max():.1f} µg/m³), lowest at {by_hour.idxmin()}h ({by_hour.min():.1f} µg/m³)')
 """)
 
 md("**Figure 5 – Spearman correlation matrix** between PM2.5 and the weather variables, per city.")
@@ -180,8 +218,23 @@ for ax, (city, df) in zip(axes, raw.items()):
     sns.heatmap(df[num_cols].corr(method='spearman'), annot=True, fmt='.2f', cmap='RdBu_r',
                 vmin=-1, vmax=1, ax=ax, cbar=False)
     ax.set_title(f'Spearman correlation – {city}')
+    print(f'{city} – Spearman correlation of PM2.5 with:',
+          df[num_cols].corr(method='spearman')['pm25'].drop('pm25').round(2).to_dict())
 plt.tight_layout()
 plt.show()
+""")
+
+md("""
+**Autocorrelation.** How much does the current value tell us about the value $k$ hours later? The lag-$k$ autocorrelation is the
+Pearson correlation between the pairs $(x_t, x_{t-k})$ for all $t$ where both hours were measured
+(`Series.autocorr(k)` in pandas). Lag 24h is the relevant one for a 24-hour-ahead forecast.
+""")
+
+code("""
+ACF_LAGS = [1, 2, 3, 6, 12, 24, 48]
+acf_table = pd.DataFrame({city: [df['pm25'].autocorr(lag) for lag in ACF_LAGS] for city, df in raw.items()},
+                         index=pd.Index(ACF_LAGS, name='lag (hours)'))
+display(acf_table.round(2))
 """)
 
 md("**EDA findings:**\n\n" + note("EDA"))

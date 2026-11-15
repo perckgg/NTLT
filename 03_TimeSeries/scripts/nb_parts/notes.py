@@ -1,19 +1,27 @@
 # Observations written from real run results (data 2024-12-01 → 2026-09-30, random_state=42, scikit-learn 1.9.1).
 NOTES = {
 "EDA": """
-- **Similar average pollution, different shapes:** mean PM2.5 is 31.7 µg/m³ in Hanoi and 32.1 µg/m³ in HCMC.
-  Hanoi is more volatile (std 20.6 vs 16.3; max 332 vs 171). Both exceed the WHO 24h guideline (15 µg/m³)
-  in most hours: 56% in Hanoi, 82% in HCMC.
-- **Seasonality:** Hanoi has a clear winter pollution season (December: 53, January: 55 µg/m³) and is cleanest in August (19 µg/m³),
-  a difference of almost 3×. HCMC is also most polluted at the end of the dry season / start of the year (January: 46 µg/m³) and cleanest in the middle of the wet season (July: 24 µg/m³), but its range is narrower.
-- **Daily cycle:** HCMC peaks in the morning at 7h (≈41 µg/m³), matching the traffic rush hour; Hanoi peaks in the evening (≈34 µg/m³ at 22h),
-  consistent with the night-time temperature inversion trapping dust near the ground.
-- **Correlation with weather:** in Hanoi PM2.5 correlates negatively with temperature (-0.31) and cloud cover (-0.25) and positively with pressure (+0.31),
-  i.e. cold, high-pressure winter air lets dust accumulate. In HCMC the strongest driver is wind speed (-0.36): strong wind disperses dust.
-- **Autocorrelation:** the lag-1h autocorrelation is very high (0.92 / 0.88), but at lag 24h it drops to 0.56 / 0.45. Forecasting 24h ahead
-  is therefore much harder than forecasting the next hour, and needs weather, season and daily-cycle features.
+(Every number below is printed by a cell above: the statistics table in 1.3, the monthly table under Figure 3, the printout under Figure 4,
+the Spearman printout under Figure 5 and the autocorrelation table.)
+- **Similar average pollution, different shapes:** mean hourly PM2.5 is 31.7 µg/m³ in Hanoi and 32.1 µg/m³ in HCMC.
+  Hanoi is more volatile (std 20.6 vs 16.3; max 332 vs 171 µg/m³).
+- **WHO guideline (24-hour mean ≤ 15 µg/m³):** it is exceeded on **91.3% of the 389 valid days in Hanoi** and **98.2% of the 613 valid days in HCMC**
+  (valid day = at least 18 measured hours). Both cities are almost always above the guideline.
+- **Seasonality (monthly means):** Hanoi has a clear winter pollution season (December 53.3, January 55.0 µg/m³) and is cleanest in August (19.4),
+  almost a 3× difference. HCMC is also most polluted at the turn of the year (January 46.2) and cleanest in July (23.5), with a narrower range.
+  Figure 3 shows medians, which are a few µg/m³ lower (e.g. Hanoi January: median 52.8) because the distribution is right-skewed.
+- **Daily cycle (complete days only):** HCMC peaks in the morning rush hour in both half-years (7h: 45.7 µg/m³ in Nov–Apr, 35.6 in May–Oct).
+  Hanoi in Nov–Apr peaks around midnight (0h: 43.4) and is lowest at 17h (38.7), consistent with a shallow night-time boundary layer
+  trapping dust near the ground and daytime mixing diluting it; its daily cycle is weak compared with its seasonal cycle.
+  Without the complete-day filter the Hanoi curve shows a spurious noon peak, an artefact of the missing afternoons after 11/2025.
+- **Correlation with weather (Spearman):** in Hanoi PM2.5 is lower with rain (−0.29), cloud cover (−0.28) and higher temperature (−0.26), and higher with
+  surface pressure (+0.28): cold, dry, high-pressure winter air lets dust accumulate. In HCMC the strongest link is wind speed (−0.38): wind disperses dust.
+  These are monotonic associations, not causal effects (season drives several of them at once).
+- **Autocorrelation:** 0.92 (Hanoi) / 0.88 (HCMC) at lag 1h, but only 0.56 / 0.45 at lag 24h. Forecasting 24h ahead is therefore much harder
+  than forecasting the next hour and needs weather, season and daily-cycle features. (In HCMC the autocorrelation at 24h is higher than at 12h, 0.45 vs 0.27:
+  the same hour of the day tends to repeat.)
 - **Data quality:** Hanoi is missing 32.8% of PM2.5 hours. Until October 2025 at most 12% of each month is missing, but **from November 2025 onwards
-  31–97% of every month is missing** (December 2025: 97%), and the station rarely reports in the afternoon (≈14h–19h). HCMC is missing 8.4%.
+  31–97% of every month is missing** (December 2025: 97%), and the station rarely reports in the afternoon. HCMC is missing 8.4%.
   The Validation and Test periods of Hanoi fall entirely in this degraded period, which must be kept in mind when reading the results.
 """,
 
@@ -98,8 +106,8 @@ This is the visual counterpart of the under-forecasting of polluted hours in Sec
   and are not shown). HCMC's error is highest during the daytime (peak 9.8 at 14h) and lowest at the 7h rush hour (7.4).
 - **By month:** the error grows towards the end of the Test period in HCMC (7.1 in July → 10.9 in September 2026), as pollution starts rising again.
   The model learned mostly from the earlier distribution, so it reacts slowly to seasonal change. Hanoi varies between 6.4 (August) and 9.4 (March).
-- **By AQI level:** the correct level is predicted for 80.8% (Hanoi) and 76.4% (HCMC) of hours; 98.5% / 98.6% are within ±1 level.
-  The main error is **under-forecasting polluted hours**: in HCMC, 285 of 359 "USG" hours are predicted as "Moderate"; in Hanoi 147 of 229 "USG" hours,
+- **By EPA concentration band:** the correct band is predicted for 80.7% (Hanoi) and 76.3% (HCMC) of hours; 98.4% / 98.6% are within ±1 band.
+  The main error is **under-forecasting polluted hours**: in HCMC, 286 of 359 "USG" hours are predicted as "Moderate"; in Hanoi 148 of 229 "USG" hours,
   and none of the 40 "Unhealthy" hours in Hanoi is predicted correctly. The model never predicts "Good", i.e. it pulls forecasts towards the mean
   (the expected behaviour of a model trained to minimize MAE).
 - **Practical consequence:** the model is useful for following the general trend, but **not yet reliable as an early-warning tool for severe pollution episodes** —
@@ -126,7 +134,7 @@ have its own model.
   monitoring data from OpenAQ combined with Open-Meteo weather (12/2024 – 09/2026). Features use only data available at forecast time
   (causal forward-fill), and models are evaluated only on measured values.
 - On the Test set, the best model (chosen on Validation) lowers MAE by **12.5% in Hanoi (RandomForest)** and **5.6% in HCMC (Ridge)** compared with the
-  strongest naive baseline (Naive blend), or by 16.4% / 10.9% compared with Persistence, and predicts the correct AQI level in 76–81% of hours.
+  strongest naive baseline (Naive blend), or by 16.4% / 10.9% compared with Persistence, and predicts the correct EPA concentration band in 76–81% of hours.
 - Block-bootstrap confidence intervals show that the Hanoi gain over the Naive blend is real (95% CI +3.2% to +20.0%), while the HCMC gain
   over the Naive blend is not significant (−1.3% to +11.8%); in HCMC, tree models are significantly worse than Ridge on Validation.
   Which ML model is best in Hanoi is not established (RandomForest vs Ridge: CI includes 0).
