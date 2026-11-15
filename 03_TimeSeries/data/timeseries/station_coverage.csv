@@ -1,0 +1,8 @@
+city,station,sensor_id,type,coverage,worst_hour_cov,worst_month_cov,longest_gap_h,first,last
+HCMC,CMT8 (AirGradient),11357424,low-cost,0.994,0.982,0.965,8,2025-07-04 00:00:00,2026-11-14 22:00:00
+Hanoi,Cong vien Nhan Chinh - Khuat Duy Tien,13502151,reference,0.964,0.95,0.721,86,2025-07-04 00:00:00,2026-11-14 22:00:00
+Hanoi,Giai Phong - DH Bach Khoa,13502154,reference,0.928,0.892,0.788,136,2025-07-04 00:00:00,2026-11-14 22:00:00
+Hanoi,Dragon (AirGradient),14581375,low-cost,0.723,0.711,0.0,3060,2025-11-08 12:00:00,2026-11-14 22:00:00
+Hanoi,556 Nguyen Van Cu,13502150,reference,0.653,0.621,0.0,2934,2025-07-04 00:00:00,2026-07-15 17:00:00
+Hanoi,46 Luu Quang Vu,7772032,reference,0.51,0.279,0.026,859,2025-07-04 00:00:00,2026-11-13 08:00:00
+Hanoi,Minh Khai - Bac Tu Liem,7772087,reference,0.148,0.016,0.0,3849,2025-08-07 11:00:00,2026-11-13 08:00:00

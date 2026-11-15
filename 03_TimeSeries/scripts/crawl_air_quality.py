@@ -3,11 +3,17 @@ Collect hourly air quality (PM2.5) + weather time series for Hanoi and
 Ho Chi Minh City (HCMC), used by the Time Series part of the course project.
 
 Sources:
-  - PM2.5: OpenAQ v3 — Hanoi: station "46 Luu Quang Vu" (Hanoi Air Quality
-    Monitoring Network); HCMC: station "CMT8" (AirGradient). Requires a free API key
-    in the OPENAQ_API_KEY environment variable. Without a key, or on error, the script
-    automatically falls back to the Open-Meteo Air Quality API (CAMS model data).
-  - Weather: Open-Meteo Historical Weather API (no key required).
+  - PM2.5: OpenAQ v3, endpoint /sensors/{id}/hours (OpenAQ's hourly mean of the
+    station's sub-hourly readings; the timestamp is the START of the hour, local time).
+      Hanoi: station "Cong vien Nhan Chinh - Khuat Duy Tien" (Hanoi Air Quality
+             Monitoring Network, reference monitor), sensor 13502151.
+      HCMC : station "CMT8" (AirGradient, low-cost sensor), sensor 11357424.
+    The stations were chosen with scripts/check_station_coverage.py (share of hours
+    measured over the study period). Requires a free API key in the OPENAQ_API_KEY
+    environment variable. Without a key, or on error, the script falls back to the
+    Open-Meteo Air Quality API (CAMS model data) and marks pm25_source accordingly.
+  - Weather: Open-Meteo Historical Weather API (no key required), taken at the
+    coordinates of each PM2.5 station.
 
 Output: one CSV file per city in data/timeseries/.
 
@@ -25,15 +31,19 @@ import urllib.request
 
 import pandas as pd
 
-# Most recent period covered by both stations (CMT8 started reporting in 11/2024).
-START_DATE = "2024-12-01"
-END_DATE = "2026-09-30"
+# Same period for both cities. Nhan Chinh started reporting on 03/07/2025 at 22:40,
+# so 04/07/2025 is its first full day; 14/11/2026 is the last full day before the crawl.
+START_DATE = "2025-07-04"
+END_DATE = "2026-11-14"
 TIMEZONE = "Asia/Ho_Chi_Minh"
 OUTPUT_DIR = os.path.join("data", "timeseries")
 
+# lat/lon = coordinates of the PM2.5 station as reported by OpenAQ (used for weather too).
 CITIES = {
-    "hanoi": {"name": "Hanoi", "lat": 21.0285, "lon": 105.8542, "openaq_sensor_id": 7772032},
-    "hcmc": {"name": "HCMC", "lat": 10.7769, "lon": 106.7009, "openaq_sensor_id": 11357424},
+    "hanoi": {"name": "Hanoi", "station": "Nhan Chinh - Khuat Duy Tien",
+              "lat": 21.0031, "lon": 105.7947, "openaq_sensor_id": 13502151},
+    "hcmc": {"name": "HCMC", "station": "CMT8",
+             "lat": 10.78533, "lon": 106.67029, "openaq_sensor_id": 11357424},
 }
 
 WEATHER_VARS = [
@@ -141,6 +151,7 @@ def build_city_dataset(key, cfg, api_key):
     df = weather.reindex(full_index).join(pm.reindex(full_index))
     df.insert(0, "city", cfg["name"])
     df["pm25_source"] = source
+    df["station"] = cfg["station"] if source == "openaq" else "CAMS model"
     return df.reset_index()
 
 
