@@ -81,8 +81,12 @@ def make_models():
         'RandomForest': Pipeline([('pre', build_preprocessor()), ('model', RandomForestRegressor(
             n_estimators=200, max_depth=12, min_samples_leaf=10, max_features=0.5,
             n_jobs=-1, random_state=RANDOM_STATE))]),
+        # early_stopping=False: the default 'auto' switches early stopping on above 10,000 samples and then holds out a
+        # *random* 10% of the rows (not a time-ordered split), so the model would behave differently in the CV folds
+        # (< 10,000 rows) and in the final fit; with False the number of trees is always exactly max_iter.
         'HistGradientBoosting': Pipeline([('pre', build_preprocessor()),
-                                          ('model', HistGradientBoostingRegressor(random_state=RANDOM_STATE))]),
+                                          ('model', HistGradientBoostingRegressor(early_stopping=False,
+                                                                                  random_state=RANDOM_STATE))]),
     }
 
 

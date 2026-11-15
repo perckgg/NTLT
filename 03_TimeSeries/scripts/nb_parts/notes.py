@@ -31,7 +31,7 @@ the Spearman printout under Figure 5 and the autocorrelation table.)
   (≈ half current value, half 24h mean; `w` = 0.45 / 0.50 learned on Train) is clearly better: MAE 13.01 vs 13.48 (Hanoi) and 7.06 vs 7.66 (HCMC).
   This is the bar a machine learning model has to clear.
 - **Hanoi:** all three ML models beat the Naive blend; RandomForest is best (MAE 12.00, ≈ 8% lower than the blend), but Ridge is very close (12.10).
-- **HCMC:** only Ridge beats the Naive blend, and only marginally (7.03 vs 7.06, ≈ 0.5%). The tree models (7.46–7.50) are **worse than the naive blend**:
+- **HCMC:** only Ridge beats the Naive blend, and only marginally (7.03 vs 7.06, ≈ 0.5%). The tree models (7.48–7.50) are **worse than the naive blend**:
   with a weak signal (R² ≤ 0.15), the strongly regularized linear model (alpha = 100) overfits less.
 - GridSearch (with a 24h `gap` between CV folds) picks a small learning rate (0.03) for HGB and large leaves (`min_samples_leaf` = 30) for RandomForest,
   i.e. it prefers simpler models — consistent with noisy data covering only 22 months.
@@ -119,7 +119,7 @@ This is the visual counterpart of the under-forecasting of polluted hours in Sec
 - **HCMC (Ridge):** the current PM2.5 level (`pm25_lag_0`, +0.98 µg/m³) and **temperature** (+0.86) matter most, followed by the **hour of day**
   (`hour_cos`) and **wind speed**. By group: PM2.5 history +1.81, weather +0.90, calendar +0.47 — HCMC's dust follows the daily traffic rhythm
   and how well the wind disperses it, consistent with the EDA (7h peak, strongest correlation with wind).
-- **Hanoi (RandomForest):** single-feature importances are all small (≤ 0.11 µg/m³, led by wind speed and the current PM2.5),
+- **Hanoi (RandomForest):** single-feature importances are all small (at most about 0.1 µg/m³, led by wind speed and the current PM2.5),
   because the model spreads the PM2.5 information over many correlated lag/rolling features. The grouped importance shows the real picture:
   **PM2.5 history +0.78, weather +0.47, calendar ≈ 0**. The calendar (season) carries no signal on this Test period, which covers only the end of winter.
   Small single-feature values such as `day_of_week` should be read as noise.
