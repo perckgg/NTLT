@@ -38,34 +38,44 @@ for city, df in raw.items():
 ax.set(title='Share of hours with PM2.5 data, by month', ylabel='% of hours with data', ylim=(0, 105))
 ax.legend()
 plt.show()
+
+missing_by_month = pd.DataFrame({city: df['pm25'].isna().resample('MS').mean() * 100 for city, df in raw.items()})
+missing_by_month.index = missing_by_month.index.strftime('%Y-%m')
+print('% of hours with missing PM2.5, by month:')
+display(missing_by_month.round(0).astype(int).T)
 """)
 
 md("""
 ### 2.2. Cleaning invalid values and handling missing data
 
-- **Invalid values:** negative PM2.5 or > 1000 µg/m³ are sensor errors → set to `NaN`.
+- **Invalid values:** PM2.5 ≤ 0 or > 1000 µg/m³ are sensor errors → set to `NaN`
+  (a reference monitor reporting exactly 0.0 is a dropout, not clean air).
 - **"Stuck" sensor:** the same value repeated for ≥ 6 consecutive hours (with PM2.5 > 0) indicates a frozen device → set to `NaN`.
-- **Short gaps (≤ 6 hours):** time-based linear interpolation (`interpolate(method='time', limit=6)`) —
-  reasonable because PM2.5 changes smoothly over a few hours.
-- **Long gaps (> 6 hours):** **not** interpolated (that would fabricate data) → samples whose *target* is missing are dropped;
+- **No look-ahead when filling.** Time interpolation (`interpolate(method='time')`) fills a gap using the value measured **after**
+  the gap, which is not known yet at forecast time $t$. If the features were built from interpolated values, the model would
+  see up to 6 hours of the future (Section 2.4 prints how many samples this would concern). We therefore keep two versions:
+  - `pm25_raw` — the measured values only. **The target is always a measured value** (never filled), so the evaluation is done on real data.
+  - `pm25` — `pm25_raw` **forward-filled for at most 6 hours** (`ffill(limit=6)`): "the last known value, if it is at most 6h old".
+    This is causal (uses only data ≤ $t$) and is used to build the features.
+- **Long gaps (> 6 hours):** not filled (that would fabricate data) → samples whose current value or target is missing are dropped;
   remaining missing features are handled by `SimpleImputer` (median, fitted on the training set) inside the pipeline.
 """)
 
 code("""
-MAX_INTERP_GAP = 6
+MAX_FILL_GAP = 6
 STUCK_HOURS = 6
 
 
 def clean_city(df):
     df = df.copy()
     pm = df['pm25']
-    invalid = (pm < 0) | (pm > 1000)
+    invalid = (pm <= 0) | (pm > 1000)
     run_id = (pm != pm.shift()).cumsum()
     run_len = pm.groupby(run_id).transform('size')
     stuck = (run_len >= STUCK_HOURS) & (pm > 0) & pm.notna()
     df.loc[invalid | stuck, 'pm25'] = np.nan
-    df['pm25_raw'] = df['pm25']
-    df['pm25'] = df['pm25'].interpolate(method='time', limit=MAX_INTERP_GAP, limit_area='inside')
+    df['pm25_raw'] = df['pm25']                                # measured values only (used for the target)
+    df['pm25'] = df['pm25_raw'].ffill(limit=MAX_FILL_GAP)      # causal fill (used for the features)
     return df, int(invalid.sum()), int(stuck.sum())
 
 
@@ -73,11 +83,11 @@ clean = {}
 for city, df in raw.items():
     clean[city], n_invalid, n_stuck = clean_city(df)
     before, after = df['pm25'].isna().mean(), clean[city]['pm25'].isna().mean()
-    print(f'{city}: {n_invalid} negative/>1000 values, {n_stuck} stuck-sensor hours | '
-          f'missing PM2.5: {before:.1%} → {after:.1%} after cleaning + interpolation')
+    print(f'{city}: {n_invalid} values ≤ 0 or > 1000, {n_stuck} stuck-sensor hours | '
+          f'missing PM2.5: {before:.1%} → {after:.1%} after cleaning + causal forward-fill (features only)')
 
 
-def first_short_gap(series, min_len=3, max_len=MAX_INTERP_GAP):
+def first_short_gap(series, min_len=3, max_len=MAX_FILL_GAP):
     is_na = series.isna()
     groups = (is_na != is_na.shift()).cumsum()
     sizes = is_na.groupby(groups).transform('sum')
@@ -92,9 +102,9 @@ for city in clean:
 if gap_time is not None:
     window = clean[city].loc[gap_time - pd.Timedelta('36h'): gap_time + pd.Timedelta('36h')]
     fig, ax = plt.subplots(figsize=(12, 4))
-    ax.plot(window.index, window['pm25'], 'o--', color='orange', label='After interpolation')
-    ax.plot(window.index, window['pm25_raw'], 'o-', color=CITY_COLORS[city], label='Original data')
-    ax.set(title=f'Short-gap interpolation example – {city}', ylabel='PM2.5 (µg/m³)')
+    ax.step(window.index, window['pm25'], where='post', ls='--', color='orange', label='Forward-filled (feature input)')
+    ax.plot(window.index, window['pm25_raw'], 'o-', color=CITY_COLORS[city], label='Measured (pm25_raw, target)')
+    ax.set(title=f'Causal forward-fill of a short gap – {city}', ylabel='PM2.5 (µg/m³)')
     ax.legend()
     plt.show()
 """)
@@ -112,12 +122,12 @@ def iqr_bounds(s, k=3.0):
 
 fig, axes = plt.subplots(1, 2, figsize=(14, 4))
 for ax, (city, df) in zip(axes, clean.items()):
-    lo, hi = iqr_bounds(df['pm25'])
-    out = df.loc[df['pm25'] > hi, 'pm25']
+    lo, hi = iqr_bounds(df['pm25_raw'])
+    out = df.loc[df['pm25_raw'] > hi, 'pm25_raw']
     top_days = out.resample('D').count().nlargest(3).index.strftime('%Y-%m-%d').tolist()
     print(f'{city}: upper bound = {hi:.1f} µg/m³ | {len(out)} outlier hours '
-          f'({len(out) / df.pm25.notna().sum():.2%}) | days with most outliers: {top_days}')
-    ax.plot(df.index, df['pm25'], lw=0.4, color=CITY_COLORS[city])
+          f'({len(out) / df.pm25_raw.notna().sum():.2%}) | days with most outliers: {top_days}')
+    ax.plot(df.index, df['pm25_raw'], lw=0.4, color=CITY_COLORS[city])
     ax.scatter(out.index, out, s=6, color='k', label='Outlier (IQR, k=3)')
     ax.axhline(hi, color='k', ls='--', lw=1)
     ax.set(title=city, ylabel='PM2.5 (µg/m³)')
@@ -136,7 +146,8 @@ to reduce the influence of extreme values on the linear model.
 md("""
 ### 2.4. Feature engineering
 
-Each sample at time $t$ has target `y = pm25(t + 24h)`. Only information **available at $t$** is used (no future leakage):
+Each sample at time $t$ has target `y = pm25_raw(t + 24h)` (a **measured** value). The features are built from the forward-filled
+series and use only information **available at $t$** (no future leakage):
 
 | Group | Features | Type |
 |---|---|---|
@@ -192,50 +203,99 @@ def build_features(df, city, horizon=HORIZON):
 
 
 def make_dataset(df, city, horizon=HORIZON):
-    \"\"\"Add target = pm25(t + horizon); keep only samples with a target and a current value.\"\"\"
+    \"\"\"Add target = measured pm25_raw(t + horizon); keep only samples with a target and a current value.\"\"\"
     X = build_features(df, city, horizon)
-    X[TARGET] = df['pm25'].shift(-horizon)
+    X[TARGET] = df['pm25_raw'].shift(-horizon)
     return X.dropna(subset=[TARGET, 'pm25_lag_0'])
 
 
 datasets = {city: make_dataset(df, city) for city, df in clean.items()}
 for city, d in datasets.items():
+    filled_now = clean[city]['pm25_raw'].reindex(d.index).isna().mean()   # current value comes from the forward-fill
     print(f'{city}: {len(d):,} samples | {len(FEATURES)} features '
-          f'({len(FEATURES) - len(CAT_FEATURES)} numerical + {len(CAT_FEATURES)} categorical)')
+          f'({len(FEATURES) - len(CAT_FEATURES)} numerical + {len(CAT_FEATURES)} categorical) | '
+          f'{filled_now:.1%} of samples have a forward-filled current value '
+          f'(with two-sided interpolation these would have used future measurements)')
 datasets['Hanoi'].head()
 """)
 
 md("""
-### 2.5. Chronological Train / Validation / Test split
-A time series **must not be shuffled** (that would leak the future into the past). The split follows **time order**:
-first 70% → Train, next 15% → Validation (model selection), last 15% → Test (final evaluation).
-An extra `HORIZON` = 24 hours is dropped before each boundary so that the **targets** of one set do not fall inside the next set's period.
+### 2.5. Chronological split: Development / Test, and walk-forward folds
+A time series **must not be shuffled** (that would leak the future into the past), so every split follows **time order** and uses
+the **same calendar dates for both cities**, so the two cities are compared over the same weather and season.
+
+- **Test** = samples issued from **01/09/2026** to the end of the data (the last 2.5 months). It is used **once**, at the very end (Section 4).
+- **Development** = all samples issued **before** 01/09/2026 − 24h. The extra `HORIZON` = 24 hours makes sure that the **target**
+  ($t + 24h$) of every Development sample is measured before the first Test forecast is issued.
+
+The data covers only one winter, and a single fixed Validation month (or 15% block) would fall in one season: a model would then be
+chosen on, say, clean summer hours and judged on the polluted season. Model selection therefore uses **walk-forward validation**
+(also called evaluation on a rolling forecasting origin, Tashman 2000; Hyndman & Athanasopoulos, *Forecasting: Principles and Practice*, §5.10):
+for every month $m$ from **10/2025 to 08/2026** (11 folds), with $s_m$ the first hour of month $m$,
+
+$$\\text{Train}_m = \\{t \\in \\text{Dev} : t < s_m - 24h\\}, \\qquad \\text{Val}_m = \\{t \\in \\text{Dev} : s_m \\le t < s_{m+1}\\}.$$
+
+Each model is refitted on $\\text{Train}_m$ (an **expanding** window: everything known before the month) and forecasts every sample
+of $\\text{Val}_m$. The 11 validation months do not overlap, so each Development hour from 10/2025 onwards is forecast **exactly once**,
+by a model that never saw it, and the validation set covers the whole winter 2025–26. The first three months (07–09/2025) are only
+used for training, so the first fold has a minimum amount of history.
 """)
 
 code("""
-def time_split(d, train_frac=0.70, val_frac=0.15, gap_hours=HORIZON):
-    n = len(d)
-    t1, t2 = d.index[int(n * train_frac)], d.index[int(n * (train_frac + val_frac))]
-    gap = pd.Timedelta(hours=gap_hours)
-    train = d[d.index < t1 - gap]
-    val = d[(d.index >= t1) & (d.index < t2 - gap)]
-    test = d[d.index >= t2]
-    return train, val, test
+TEST_START = pd.Timestamp('2026-09-01')
+WALK_FORWARD_MONTHS = pd.period_range('2025-10', '2026-08', freq='M')
 
 
-splits = {city: time_split(d) for city, d in datasets.items()}
+def dev_test_split(d, test_start=TEST_START, gap_hours=HORIZON):
+    \"\"\"Development = samples whose target is measured before test_start; Test = samples issued from test_start.\"\"\"
+    dev = d[d.index < test_start - pd.Timedelta(hours=gap_hours)]
+    test = d[d.index >= test_start]
+    return dev, test
+
+
+def walk_forward_folds(dev, months=WALK_FORWARD_MONTHS, gap_hours=HORIZON):
+    \"\"\"For each month m: (m, train = samples whose target is known before m starts, val = samples issued in m).\"\"\"
+    folds = []
+    for m in months:
+        start, end = m.start_time, (m + 1).start_time
+        train = dev[dev.index < start - pd.Timedelta(hours=gap_hours)]
+        val = dev[(dev.index >= start) & (dev.index < end)]
+        folds.append((m, train, val))
+    return folds
+
+
+splits = {city: dev_test_split(d) for city, d in datasets.items()}
 
 fig, axes = plt.subplots(2, 1, figsize=(14, 6), sharex=True)
-for ax, (city, (tr, va, te)) in zip(axes, splits.items()):
-    for part, name, color in [(tr, 'Train', 'tab:blue'), (va, 'Validation', 'tab:orange'), (te, 'Test', 'tab:green')]:
+for ax, (city, (dev, te)) in zip(axes, splits.items()):
+    pre_wf = dev[dev.index < WALK_FORWARD_MONTHS[0].start_time]
+    wf = dev[dev.index >= WALK_FORWARD_MONTHS[0].start_time]
+    for part, name, color in [(pre_wf, 'Development – training only', 'tab:blue'),
+                              (wf, 'Development – walk-forward validation months', 'tab:orange'),
+                              (te, 'Test', 'tab:green')]:
         daily = part[TARGET].resample('D').mean()
         ax.plot(daily.index, daily, color=color, lw=0.8,
                 label=f'{name}: {len(part):,} samples ({part.index.min():%d/%m/%Y} – {part.index.max():%d/%m/%Y})')
-    ax.set(title=city, ylabel='PM2.5 (µg/m³)')
-    ax.legend(loc='upper right', fontsize=9)
+    for m in WALK_FORWARD_MONTHS:
+        ax.axvline(m.start_time, color='gray', lw=0.5, ls=':')
+    ax.set(title=f'{city} (dotted lines: start of each walk-forward fold)', ylabel='Daily mean target PM2.5 (µg/m³)')
+    ax.legend(loc='upper left', fontsize=9)
+    print(f'{city} split: Development {len(dev):,} ({dev.index.min():%Y-%m-%d} → {dev.index.max():%Y-%m-%d %H:%M}) | '
+          f'Test {len(te):,} ({te.index.min():%Y-%m-%d} → {te.index.max():%Y-%m-%d %H:%M}) samples | '
+          f'mean target: Development {dev[TARGET].mean():.1f}, Test {te[TARGET].mean():.1f} µg/m³')
 plt.tight_layout()
 plt.show()
+
+rows = []
+for city, (dev, te) in splits.items():
+    for m, tr, va in walk_forward_folds(dev):
+        rows.append({'city': city, 'month': str(m), 'train': len(tr), 'validation': len(va)})
+fold_sizes = pd.DataFrame(rows).pivot(index='month', columns='city', values=['train', 'validation'])
+print('Walk-forward folds: number of samples in the training window and in the validation month')
+display(fold_sizes)
 """)
+
+md(note("SPLIT"))
 
 md("""
 ### 2.6. Preprocessing pipeline (imputation, outlier clipping, encoding, scaling)
@@ -247,7 +307,8 @@ md("""
 | Categorical | `SimpleImputer(most_frequent)` → `OneHotEncoder` |
 
 Everything lives inside a `ColumnTransformer` + `Pipeline`, so all parameters (medians, IQR bounds, mean/std, categories)
-are **learned on the training set only** → no data leakage.
+are **learned on the data the pipeline is fitted on** (the training window of each fold, or the whole Development set
+for the final model), never on the data it is evaluated on → no data leakage.
 """)
 
 code("""
@@ -282,7 +343,7 @@ def build_preprocessor():
     ], sparse_threshold=0)
 
 
-tr = splits['Hanoi'][0]
+tr = splits['Hanoi'][0]   # Development set of Hanoi
 pre = build_preprocessor().fit(tr[FEATURES])
 Xt = pd.DataFrame(pre.transform(tr[FEATURES]), columns=pre.get_feature_names_out(), index=tr.index)
 print(f'After preprocessing: {Xt.shape[1]} columns (from {len(FEATURES)} original columns, one-hot expands the categoricals)')
@@ -290,7 +351,7 @@ print('Missing values left after the pipeline:', int(Xt.isna().sum().sum()))
 
 fig, axes = plt.subplots(1, 2, figsize=(14, 4))
 sns.histplot(tr['pm25_lag_0'], bins=80, ax=axes[0], color='gray')
-axes[0].set(title='pm25_lag_0 – before preprocessing (Hanoi, train)', xlabel='µg/m³')
+axes[0].set(title='pm25_lag_0 – before preprocessing (Hanoi, Development)', xlabel='µg/m³')
 sns.histplot(Xt['pm__pm25_lag_0'], bins=80, ax=axes[1], color='teal')
 axes[1].set(title='After IQRClipper + StandardScaler', xlabel='z-score')
 plt.tight_layout()
